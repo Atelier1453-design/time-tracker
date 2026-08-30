@@ -37,7 +37,13 @@ export const fmtTime = (style, ms) => {
   return m === 0 ? `${d.getHours()}時` : `${d.getHours()}時${m}分`;
 };
 
-export const verbOf = (style, a) => (style.tone === "polite" ? a.verbPolite || "しました" : a.verbPlain || "した");
+/* 「」（空文字＝なし）は正規の値として扱い、フォールバックしない。
+   フォールバックするのは値が未設定（null/undefined）のときだけ。 */
+export const verbOf = (style, a) => {
+  const v = style.tone === "polite" ? a.verbPolite : a.verbPlain;
+  if (v != null) return v;
+  return style.tone === "polite" ? "しました" : "した";
+};
 export const finalOf = (style, w) => (style.tone === "polite" ? w?.polite || w?.plain || "" : w?.plain || "");
 
 export const pointsSentence = (style, a, st, en, hasStart, hasEnd) => {
@@ -52,11 +58,28 @@ export const pointsSentence = (style, a, st, en, hasStart, hasEnd) => {
 
 const valid = (s) => s.end == null || s.end > s.start;
 
+/* 「名前だけ」型の文。verb が空（「なし」を選んだ）なら動詞なしで名前だけ言い切る。 */
+const nameSentence = (style, a) => {
+  const verb = verbOf(style, a);
+  return verb ? `${a.name}を${verb}。` : `${a.name}。`;
+};
+
+/* 「期間で書く」型の文。timeFirst なら時間を先に、名前をあとに言う。
+   「名前だけ」型でだけ選べる「なし」を、型を切り替えたあとに引き継いでいた
+   場合は、動詞なしの文にならないようふつうの言い方に戻す。 */
+const spanSentence = (style, a, spans, ms) => {
+  const verb = verbOf(style, a) || (style.tone === "polite" ? "しました" : "した");
+  const total = a.showTotal === false ? "" : `（合計${dur(ms)}）`;
+  return a.timeFirst
+    ? `${spans}${a.name}を${verb}。${total}`
+    : `${a.name}を${spans}${verb}。${total}`;
+};
+
 export const sentencesFor = (ctx, a) => {
   const { style, viewDay, dayEnd, now, day, dayRecords } = ctx;
   const fmt = (ms) => fmtTime(style, ms);
   if (a.diary === "off") return [];
-  if (a.diary === "name") return [`${a.name}を${verbOf(style, a)}。`];
+  if (a.diary === "name") return [nameSentence(style, a)];
   if (a.diary === "points") {
     return dayRecords.filter((s) => s.activityId === a.id && valid(s)).map((s) => {
       const end = s.end ?? now;
@@ -70,16 +93,64 @@ export const sentencesFor = (ctx, a) => {
   if (!segs.length) return [];
   const spans = segs.map((s) => `${fmt(s.from)}から${fmt(s.to)}まで`).join("、");
   const ms = segs.reduce((n, s) => n + (s.to - s.from), 0);
-  return [`${a.name}を${spans}${verbOf(style, a)}。${a.showTotal === false ? "" : `（合計${dur(ms)}）`}`];
+  return [spanSentence(style, a, spans, ms)];
 };
 
 export const previewOf = (style, a, viewDay) => {
   const st = viewDay + 9 * 3600000, en = viewDay + 18 * 3600000;
   const fmt = (ms) => fmtTime(style, ms);
   if (a.diary === "off") return "（日記には出ません）";
-  if (a.diary === "name") return `${a.name}を${verbOf(style, a)}。`;
+  if (a.diary === "name") return nameSentence(style, a);
   if (a.diary === "points") return pointsSentence(style, a, st, en, true, true);
-  return `${a.name}を${fmt(st)}から${fmt(en)}まで${verbOf(style, a)}。${a.showTotal === false ? "" : "（合計9時間）"}`;
+  return spanSentence(style, a, `${fmt(st)}から${fmt(en)}まで`, 9 * 3600000);
+};
+
+/* ── 同時進行の記録を1文にまとめる（例：「仕事中に休憩をとった。」）──
+   短い方の記録が長い方の記録にすっぽり収まっている（入れ子になっている）
+   場合だけ対象にする。またがっているだけの記録は今まで通り別々に書く。 */
+const OVERLAP_JOIN = {
+  chu: (outerName) => `${outerName}中に`,
+  tochu: (outerName) => `${outerName}の途中で`,
+  nagara: (outerName) => `${outerName}をしながら`,
+};
+
+const innerPhrase = (style, a, seg) => {
+  if (a.diary === "name") {
+    const verb = verbOf(style, a);
+    return verb ? `${a.name}を${verb}` : a.name;
+  }
+  const fmt = (ms) => fmtTime(style, ms);
+  const verb = verbOf(style, a) || (style.tone === "polite" ? "しました" : "した");
+  return `${a.name}を${fmt(seg.from)}から${fmt(seg.to)}まで${verb}`;
+};
+
+function findOverlapCombos(day, listed) {
+  const combos = new Map(); // outerActivityId -> { text, innerId }
+  const eligible = listed.filter((a) => a.diary === "span" || a.diary === "name");
+  for (const outer of eligible) {
+    const outerSegs = day.filter((s) => s.activityId === outer.id);
+    if (outerSegs.length !== 1 || outer.diary !== "span") continue;
+    const outerSeg = outerSegs[0];
+    let best = null;
+    for (const inner of eligible) {
+      if (inner.id === outer.id) continue;
+      const innerSegs = day.filter((s) => s.activityId === inner.id);
+      if (innerSegs.length !== 1) continue;
+      const innerSeg = innerSegs[0];
+      const innerLen = innerSeg.to - innerSeg.from, outerLen = outerSeg.to - outerSeg.from;
+      if (innerSeg.from >= outerSeg.from && innerSeg.to <= outerSeg.to && innerLen < outerLen) {
+        if (!best || innerLen < best.len) best = { inner, seg: innerSeg, len: innerLen };
+      }
+    }
+    if (best) combos.set(outer.id, { innerId: best.inner.id, seg: best.seg, innerAct: best.inner, outerSeg });
+  }
+  return combos;
+}
+
+export const composeOverlapSentence = (style, overlapPhrase, outerAct, combo) => {
+  const join = OVERLAP_JOIN[overlapPhrase];
+  if (!join) return null;
+  return `${join(outerAct.name)}${innerPhrase(style, combo.innerAct, combo.seg)}。`;
 };
 
 export const fillPlaceholders = (text, viewDay, w) =>
@@ -104,7 +175,18 @@ export const composeDiary = (ctx, activitiesByTime, w) => {
       const names = listed.filter((a) => a.inIntro !== false).map((a) => a.name);
       if (names.length) body.push(`今日は${names.join("、")}${t_(style, "をしました。", "をした。")}`);
     }
-    for (const a of listed) body.push(...sentencesFor(ctx, a));
+    const overlapPhrase = style.overlapPhrase || "none";
+    const combos = overlapPhrase !== "none" ? findOverlapCombos(day, listed) : new Map();
+    const consumedIds = new Set();
+    combos.forEach((combo) => consumedIds.add(combo.innerId));
+    for (const a of listed) {
+      if (combos.has(a.id)) {
+        const sentence = composeOverlapSentence(style, overlapPhrase, a, combos.get(a.id));
+        if (sentence) { body.push(sentence); continue; }
+      }
+      if (consumedIds.has(a.id)) continue;
+      body.push(...sentencesFor(ctx, a));
+    }
     if (style.summary) {
       const sp = day.filter((s) => act(s.activityId)?.inIntro !== false);
       if (sp.length) {

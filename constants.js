@@ -44,7 +44,7 @@ export const END_PRESETS = [
   { plain: "出た", polite: "出ました" },
 ];
 
-const base = { diary: "span", verbPlain: "した", verbPolite: "しました", showTotal: true, inIntro: true, sp: "に", ep: "に" };
+const base = { diary: "span", verbPlain: "した", verbPolite: "しました", showTotal: true, timeFirst: false, inIntro: true, sp: "に", ep: "に" };
 
 export const DEFAULT_ACTIVITIES = [
   { ...base, id: "a1", name: "仕事", color: "#D2542F" },
@@ -61,7 +61,7 @@ export const DEFAULT_ACTIVITIES = [
   { ...base, id: "a6", name: "休憩", color: "#7C8A7E", diary: "name", verbPlain: "とった", verbPolite: "とりました" },
 ];
 
-export const DEFAULT_STYLE = { tone: "polite", timeFmt: "colon", weather: true, intro: true, summary: true };
+export const DEFAULT_STYLE = { tone: "polite", timeFmt: "colon", weather: true, intro: true, summary: true, overlapPhrase: "none" };
 export const DEFAULT_TEMPLATES = [{ id: "t1", label: "締めの一文", text: "今日もおつかれさま。", auto: "none" }];
 
 export const STORE_KEY = "timetrack-v3";

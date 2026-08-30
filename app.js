@@ -60,6 +60,7 @@ function App() {
   const [geoResults, setGeoResults] = useState([]);
   const [geoBusy, setGeoBusy] = useState(false);
   const [geoMsg, setGeoMsg] = useState("");
+  const [barTip, setBarTip] = useState(null); // { id, left, text }
   const dirty = useRef(false);
   const areaRef = useRef(null);
 
@@ -248,7 +249,7 @@ function App() {
   const copyDiary = async () => {
     try { await navigator.clipboard.writeText(diary); setCopied(true); setTimeout(() => setCopied(false), 1800); } catch (e) { setCopied(false); }
   };
-  useEffect(() => { setDiary(null); setSaved(false); }, [viewDay]);
+  useEffect(() => { setDiary(null); setSaved(false); setBarTip(null); }, [viewDay]);
 
   /* ── weather location search ── */
   const runGeoSearch = async () => {
@@ -352,6 +353,7 @@ function App() {
     label: { fontSize: 11, letterSpacing: "0.18em", color: MUTED, marginBottom: 10 },
     ghost: { background: "transparent", border: `1px solid ${RULE}`, color: MUTED, fontSize: 11, padding: "5px 8px" },
     input: { border: `1px solid ${RULE}`, padding: 6, fontSize: 13, background: PAPER, color: INK, fontFamily: "inherit" },
+    divider: { borderTop: `1px solid ${RULE}`, marginTop: 26 },
   };
   const pill = (on) => ({ padding: "7px 12px", fontSize: 12, background: on ? INK : "transparent", color: on ? PAPER : MUTED, border: `1px solid ${on ? INK : RULE}` });
 
@@ -380,15 +382,27 @@ function App() {
       </div>
 
       <div style=${{ marginBottom: 16 }}>
-        <div style=${{ position: "relative", height: 78, background: "#E7E9E5", border: `1px solid ${RULE}`, overflow: "hidden" }}>
-          ${Array.from({ length: 25 }, (_, hh) => html`
-            <div key=${hh} style=${{ position: "absolute", left: `${(hh / 24) * 100}%`, top: 0, width: 1, height: hh % 6 === 0 ? "100%" : 6, background: hh % 6 === 0 ? "rgba(22,32,43,.16)" : "rgba(22,32,43,.28)" }} />`)}
-          ${slices.map(({ t0, t1, live }) => html`
-            <div key=${t0} style=${{ position: "absolute", left: `${((t0 - viewDay) / DAY) * 100}%`, width: `${Math.max(((t1 - t0) / DAY) * 100, 0.25)}%`, top: 0, height: "100%", display: "flex", flexDirection: "column" }}>
-              ${live.map((s, i) => html`
-                <div key=${s.id} title=${`${act(s.activityId)?.name} ${hhmm(s.from)}–${hhmm(s.to)}`} style=${{ flex: 1, background: act(s.activityId)?.color ?? INK, borderTop: i > 0 ? "1px solid rgba(255,255,255,.6)" : "none", opacity: s.end == null ? 1 : 0.9 }} />`)}
-            </div>`)}
-          ${isToday && html`<div style=${{ position: "absolute", left: `${((now - viewDay) / DAY) * 100}%`, top: 0, width: 2, height: "100%", background: INK }} />`}
+        <div style=${{ position: "relative" }}>
+          <div style=${{ position: "relative", height: 78, background: "#E7E9E5", border: `1px solid ${RULE}`, overflow: "hidden" }} onClick=${() => setBarTip(null)}>
+            ${Array.from({ length: 25 }, (_, hh) => html`
+              <div key=${hh} style=${{ position: "absolute", left: `${(hh / 24) * 100}%`, top: 0, width: 1, height: hh % 6 === 0 ? "100%" : 6, background: hh % 6 === 0 ? "rgba(22,32,43,.16)" : "rgba(22,32,43,.28)" }} />`)}
+            ${slices.map(({ t0, t1, live }) => html`
+              <div key=${t0} style=${{ position: "absolute", left: `${((t0 - viewDay) / DAY) * 100}%`, width: `${Math.max(((t1 - t0) / DAY) * 100, 0.25)}%`, top: 0, height: "100%", display: "flex", flexDirection: "column" }}>
+                ${live.map((s, i) => html`
+                  <div key=${s.id} onClick=${(e) => {
+                      e.stopPropagation();
+                      const a2 = act(s.activityId);
+                      const durText = s.end == null ? "計測中" : dur(s.to - s.from);
+                      const left = ((s.from + s.to) / 2 - viewDay) / DAY * 100;
+                      setBarTip((prev) => (prev?.id === s.id ? null : { id: s.id, left, text: `${a2?.name ?? "—"}、${hhmm(s.from)}〜${hhmm(s.to)}（${durText}）` }));
+                    }} style=${{ flex: 1, background: act(s.activityId)?.color ?? INK, borderTop: i > 0 ? "1px solid rgba(255,255,255,.6)" : "none", opacity: s.end == null ? 1 : 0.9 }} />`)}
+              </div>`)}
+            ${isToday && html`<div style=${{ position: "absolute", left: `${((now - viewDay) / DAY) * 100}%`, top: 0, width: 2, height: "100%", background: INK }} />`}
+          </div>
+          ${barTip && html`
+            <div style=${{ position: "absolute", left: `${barTip.left}%`, transform: "translateX(-50%)", top: "100%", marginTop: 6, background: INK, color: PAPER, fontSize: 11, padding: "6px 10px", whiteSpace: "nowrap", zIndex: 5, fontVariantNumeric: "tabular-nums" }}>
+              ${barTip.text}
+            </div>`}
         </div>
         <div style=${{ display: "flex", justifyContent: "space-between", fontSize: 10, color: MUTED, marginTop: 4, letterSpacing: "0.08em" }}>
           ${[0, 6, 12, 18, 24].map((hh) => html`<span key=${hh}>${hh}</span>`)}
@@ -445,7 +459,7 @@ function App() {
           <div style=${{ ...S.label, display: "flex", justifyContent: "space-between" }}>
             <span>日記</span>${saved && html`<span style=${{ color: MUTED }}>保存済み</span>`}
           </div>
-          <textarea ref=${areaRef} value=${diary} onChange=${(e) => { setDiary(e.target.value); setSaved(false); }} rows=${Math.min(20, diary.split("\n").length + 3)}
+          <textarea ref=${areaRef} value=${diary} onInput=${(e) => { setDiary(e.target.value); setSaved(false); }} rows=${Math.min(20, diary.split("\n").length + 3)}
             style=${{ width: "100%", border: `1px solid ${RULE}`, background: PAPER, color: INK, padding: 10, fontSize: 14, lineHeight: 1.8, fontFamily: "'Hiragino Sans','Yu Gothic',system-ui,sans-serif", resize: "vertical" }} />
           ${templates.filter((x) => x.text.trim()).length > 0 && html`
             <div style=${{ marginTop: 8 }}>
@@ -508,13 +522,13 @@ function App() {
               <span style=${{ fontSize: 11, color: MUTED }}>直前の記録の続き</span>
               <button onClick=${() => setDraft((d) => ({ ...d, manual: true, start: toTimeInput(chainStart) }))} style=${S.ghost}>時刻を変える</button>
               ` : html`
-              <input type="time" value=${draft.start || "09:00"} onChange=${(e) => setDraft((d) => ({ ...d, start: e.target.value }))} style=${S.input} />
+              <input type="time" value=${draft.start || "09:00"} onInput=${(e) => setDraft((d) => ({ ...d, start: e.target.value }))} style=${S.input} />
               ${chainStart != null && !draft.parallel && html`<button onClick=${() => setDraft((d) => ({ ...d, manual: false }))} style=${S.ghost}>直前の続きに戻す</button>`}
               `}
           </div>
           <div style=${{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
             <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>終了</span>
-            <input type="time" value=${draft.end} onChange=${(e) => setDraft((d) => ({ ...d, end: e.target.value }))} style=${S.input} />
+            <input type="time" value=${draft.end} onInput=${(e) => setDraft((d) => ({ ...d, end: e.target.value }))} style=${S.input} />
             <button onClick=${addManual} disabled=${!draft.end} style=${{ padding: "9px 18px", background: draft.end ? INK : RULE, color: PAPER, border: "none", fontSize: 13 }}>追加</button>
           </div>
           <button onClick=${() => setDraft((d) => ({ ...d, parallel: !d.parallel, manual: !d.parallel }))} style=${pill(draft.parallel)}>同時進行の記録として足す</button>
@@ -533,7 +547,7 @@ function App() {
                 </div>
                 <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
                   <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>開始</span>
-                  <input type="time" value=${toTimeInput(s.start)} onChange=${(e) => setTime(s.id, "start", e.target.value)} style=${S.input} />
+                  <input type="time" value=${toTimeInput(s.start)} onInput=${(e) => setTime(s.id, "start", e.target.value)} style=${S.input} />
                   <span style=${{ fontSize: 10, color: MUTED }}>${dateLabel(s.start)}</span>
                   <button onClick=${() => nudgeDay(s.id, "start", -1)} style=${S.ghost}>−1日</button>
                   ${pb != null && html`<button onClick=${() => snap(s.id, "start", pb)} style=${{ ...S.ghost, color: INK }}>直前に合わせる（${hhmm(pb)}）</button>`}
@@ -541,7 +555,7 @@ function App() {
                 <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                   <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>終了</span>
                   ${s.end == null ? html`<span style=${{ fontSize: 12, color: MUTED }}>計測中</span>` : html`
-                    <input type="time" value=${toTimeInput(s.end)} onChange=${(e) => setTime(s.id, "end", e.target.value)} style=${S.input} />
+                    <input type="time" value=${toTimeInput(s.end)} onInput=${(e) => setTime(s.id, "end", e.target.value)} style=${S.input} />
                     <span style=${{ fontSize: 10, color: MUTED }}>${dateLabel(s.end)}</span>
                     <button onClick=${() => nudgeDay(s.id, "end", -1)} style=${S.ghost}>−1日</button>
                     <button onClick=${() => nudgeDay(s.id, "end", 1)} style=${S.ghost}>+1日</button>
@@ -570,7 +584,7 @@ function App() {
 
           ${ea && html`
             <div style=${{ marginTop: 16, borderTop: `1px solid ${RULE}`, paddingTop: 14 }}>
-              <input value=${ea.name} onChange=${(e) => patchActivity(ea.id, { name: e.target.value })} style=${{ ...S.input, width: "100%", fontSize: 15, padding: 9 }} />
+              <input value=${ea.name} onInput=${(e) => patchActivity(ea.id, { name: e.target.value })} style=${{ ...S.input, width: "100%", fontSize: 15, padding: 9 }} />
               <div style=${{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
                 ${SWATCHES.map((c) => html`<button key=${c} onClick=${() => patchActivity(ea.id, { color: c })} aria-label=${`色を変更 ${c}`} style=${{ width: 28, height: 28, background: c, border: ea.color === c ? `2px solid ${INK}` : "1px solid rgba(0,0,0,.1)" }} />`)}
               </div>
@@ -590,10 +604,13 @@ function App() {
                   ${VERB_PRESETS.map((v) => html`<button key=${v.plain} onClick=${() => patchActivity(ea.id, { verbPlain: v.plain, verbPolite: v.polite })} style=${pill(ea.verbPlain === v.plain)}>${v.plain}</button>`)}
                 </div>
                 <div style=${{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <label style=${{ fontSize: 10, color: MUTED }}>〜た形<input value=${ea.verbPlain || ""} onChange=${(e) => patchActivity(ea.id, { verbPlain: e.target.value })} style=${{ ...S.input, display: "block", width: 120, marginTop: 3 }} /></label>
-                  <label style=${{ fontSize: 10, color: MUTED }}>〜ました形<input value=${ea.verbPolite || ""} onChange=${(e) => patchActivity(ea.id, { verbPolite: e.target.value })} style=${{ ...S.input, display: "block", width: 120, marginTop: 3 }} /></label>
+                  <label style=${{ fontSize: 10, color: MUTED }}>〜た形<input value=${ea.verbPlain || ""} onInput=${(e) => patchActivity(ea.id, { verbPlain: e.target.value })} style=${{ ...S.input, display: "block", width: 120, marginTop: 3 }} /></label>
+                  <label style=${{ fontSize: 10, color: MUTED }}>〜ました形<input value=${ea.verbPolite || ""} onInput=${(e) => patchActivity(ea.id, { verbPolite: e.target.value })} style=${{ ...S.input, display: "block", width: 120, marginTop: 3 }} /></label>
                 </div>
-                <button onClick=${() => patchActivity(ea.id, { showTotal: ea.showTotal === false })} style=${{ ...pill(ea.showTotal !== false), marginTop: 12 }}>合計を出す</button>
+                <div style=${{ display: "flex", gap: 6, marginTop: 12 }}>
+                  <button onClick=${() => patchActivity(ea.id, { showTotal: ea.showTotal === false })} style=${pill(ea.showTotal !== false)}>合計を出す</button>
+                  <button onClick=${() => patchActivity(ea.id, { timeFirst: !ea.timeFirst })} style=${pill(!!ea.timeFirst)}>時間を先に書く</button>
+                </div>
               `}
 
               ${ea.diary === "points" && html`
@@ -624,14 +641,14 @@ function App() {
                     </div>
                     <div style=${{ fontSize: 11, color: MUTED, marginBottom: 4 }}>開始</div>
                     <div style=${{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-                      <label style=${{ fontSize: 10, color: MUTED }}>つなぐ形<input value=${ea.startWord?.join || ""} onChange=${(e) => patchActivity(ea.id, { startWord: { ...ea.startWord, join: e.target.value } })} style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
-                      <label style=${{ fontSize: 10, color: MUTED }}>〜た形<input value=${ea.startWord?.plain || ""} onChange=${(e) => patchActivity(ea.id, { startWord: { ...ea.startWord, plain: e.target.value } })} style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
-                      <label style=${{ fontSize: 10, color: MUTED }}>〜ました形<input value=${ea.startWord?.polite || ""} onChange=${(e) => patchActivity(ea.id, { startWord: { ...ea.startWord, polite: e.target.value } })} style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
+                      <label style=${{ fontSize: 10, color: MUTED }}>つなぐ形<input value=${ea.startWord?.join || ""} onInput=${(e) => patchActivity(ea.id, { startWord: { ...ea.startWord, join: e.target.value } })} style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
+                      <label style=${{ fontSize: 10, color: MUTED }}>〜た形<input value=${ea.startWord?.plain || ""} onInput=${(e) => patchActivity(ea.id, { startWord: { ...ea.startWord, plain: e.target.value } })} style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
+                      <label style=${{ fontSize: 10, color: MUTED }}>〜ました形<input value=${ea.startWord?.polite || ""} onInput=${(e) => patchActivity(ea.id, { startWord: { ...ea.startWord, polite: e.target.value } })} style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
                     </div>
                     <div style=${{ fontSize: 11, color: MUTED, marginBottom: 4 }}>終了</div>
                     <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <label style=${{ fontSize: 10, color: MUTED }}>〜た形<input value=${ea.endWord?.plain || ""} onChange=${(e) => patchActivity(ea.id, { endWord: { ...ea.endWord, plain: e.target.value } })} style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
-                      <label style=${{ fontSize: 10, color: MUTED }}>〜ました形<input value=${ea.endWord?.polite || ""} onChange=${(e) => patchActivity(ea.id, { endWord: { ...ea.endWord, polite: e.target.value } })} style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
+                      <label style=${{ fontSize: 10, color: MUTED }}>〜た形<input value=${ea.endWord?.plain || ""} onInput=${(e) => patchActivity(ea.id, { endWord: { ...ea.endWord, plain: e.target.value } })} style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
+                      <label style=${{ fontSize: 10, color: MUTED }}>〜ました形<input value=${ea.endWord?.polite || ""} onInput=${(e) => patchActivity(ea.id, { endWord: { ...ea.endWord, polite: e.target.value } })} style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
                     </div>
                   </div>`}
               `}
@@ -639,11 +656,12 @@ function App() {
               ${ea.diary === "name" && html`
                 <div style=${{ ...S.label, marginTop: 18 }}>使う言葉</div>
                 <div style=${{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                  <button onClick=${() => patchActivity(ea.id, { verbPlain: "", verbPolite: "" })} style=${pill(!ea.verbPlain)}>なし</button>
                   ${VERB_PRESETS.map((v) => html`<button key=${v.plain} onClick=${() => patchActivity(ea.id, { verbPlain: v.plain, verbPolite: v.polite })} style=${pill(ea.verbPlain === v.plain)}>${v.plain}</button>`)}
                 </div>
                 <div style=${{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <label style=${{ fontSize: 10, color: MUTED }}>〜た形<input value=${ea.verbPlain || ""} onChange=${(e) => patchActivity(ea.id, { verbPlain: e.target.value })} style=${{ ...S.input, display: "block", width: 120, marginTop: 3 }} /></label>
-                  <label style=${{ fontSize: 10, color: MUTED }}>〜ました形<input value=${ea.verbPolite || ""} onChange=${(e) => patchActivity(ea.id, { verbPolite: e.target.value })} style=${{ ...S.input, display: "block", width: 120, marginTop: 3 }} /></label>
+                  <label style=${{ fontSize: 10, color: MUTED }}>〜た形<input value=${ea.verbPlain || ""} onInput=${(e) => patchActivity(ea.id, { verbPlain: e.target.value })} style=${{ ...S.input, display: "block", width: 120, marginTop: 3 }} /></label>
+                  <label style=${{ fontSize: 10, color: MUTED }}>〜ました形<input value=${ea.verbPolite || ""} onInput=${(e) => patchActivity(ea.id, { verbPolite: e.target.value })} style=${{ ...S.input, display: "block", width: 120, marginTop: 3 }} /></label>
                 </div>
               `}
 
@@ -657,7 +675,8 @@ function App() {
               </div>
             </div>`}
 
-          <div style=${{ ...S.label, marginTop: 26 }}>定型文</div>
+          <div style=${S.divider} />
+          <div style=${{ ...S.label, marginTop: 18 }}>定型文</div>
           <div style=${{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             ${templates.map((x) => {
               const on = editingTemplate === x.id;
@@ -671,8 +690,8 @@ function App() {
 
           ${et && html`
             <div style=${{ marginTop: 14, borderTop: `1px solid ${RULE}`, paddingTop: 14 }}>
-              <input value=${et.label} onChange=${(e) => patchTemplate(et.id, { label: e.target.value })} placeholder="呼び名" style=${{ ...S.input, width: "100%", fontSize: 14, padding: 8 }} />
-              <textarea value=${et.text} onChange=${(e) => patchTemplate(et.id, { text: e.target.value })} rows="3" placeholder="日記に差し込む文章"
+              <input value=${et.label} onInput=${(e) => patchTemplate(et.id, { label: e.target.value })} placeholder="呼び名" style=${{ ...S.input, width: "100%", fontSize: 14, padding: 8 }} />
+              <textarea value=${et.text} onInput=${(e) => patchTemplate(et.id, { text: e.target.value })} rows="3" placeholder="日記に差し込む文章"
                 style=${{ ...S.input, width: "100%", marginTop: 8, fontSize: 14, lineHeight: 1.7, fontFamily: "'Hiragino Sans','Yu Gothic',system-ui,sans-serif", resize: "vertical" }} />
               <div style=${{ fontSize: 10, color: MUTED, marginTop: 6 }}>文中に {"{日付}"} {"{天気}"} {"{曜日}"} と書くと置き換わります。</div>
               <div style=${{ ...S.label, marginTop: 14 }}>自動で入れる位置</div>
@@ -685,7 +704,8 @@ function App() {
               </div>
             </div>`}
 
-          <div style=${{ ...S.label, marginTop: 26 }}>日記全体の書き方</div>
+          <div style=${S.divider} />
+          <div style=${{ ...S.label, marginTop: 18 }}>日記全体の書き方</div>
           <div style=${{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
             <button onClick=${() => mutate(() => setStyle((s) => ({ ...s, tone: "polite" })))} style=${pill(style.tone === "polite")}>〜ました</button>
             <button onClick=${() => mutate(() => setStyle((s) => ({ ...s, tone: "plain" })))} style=${pill(style.tone === "plain")}>〜た</button>
@@ -700,10 +720,19 @@ function App() {
             <button onClick=${() => mutate(() => setStyle((s) => ({ ...s, summary: !s.summary })))} style=${pill(style.summary)}>まとめの一文</button>
           </div>
 
-          <div style=${{ ...S.label, marginTop: 26 }}>天気を調べる場所</div>
-          <input value=${place} onChange=${(e) => mutate(() => setPlace(e.target.value))} style=${{ ...S.input, width: "100%", fontSize: 14, padding: 9 }} placeholder="日記に載る地名（例：東京都）" />
+          <div style=${{ fontSize: 10, color: MUTED, marginTop: 18, marginBottom: 6 }}>同時進行だった記録の書き方（片方がもう片方にすっぽり収まっている時だけ）</div>
+          <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button onClick=${() => mutate(() => setStyle((s) => ({ ...s, overlapPhrase: "none" })))} style=${pill((style.overlapPhrase || "none") === "none")}>そのまま別々に書く</button>
+            <button onClick=${() => mutate(() => setStyle((s) => ({ ...s, overlapPhrase: "chu" })))} style=${pill(style.overlapPhrase === "chu")}>◯◯中に◯◯</button>
+            <button onClick=${() => mutate(() => setStyle((s) => ({ ...s, overlapPhrase: "tochu" })))} style=${pill(style.overlapPhrase === "tochu")}>◯◯の途中で◯◯</button>
+            <button onClick=${() => mutate(() => setStyle((s) => ({ ...s, overlapPhrase: "nagara" })))} style=${pill(style.overlapPhrase === "nagara")}>◯◯をしながら◯◯</button>
+          </div>
+
+          <div style=${S.divider} />
+          <div style=${{ ...S.label, marginTop: 18 }}>天気を調べる場所</div>
+          <input value=${place} onInput=${(e) => mutate(() => setPlace(e.target.value))} style=${{ ...S.input, width: "100%", fontSize: 14, padding: 9 }} placeholder="日記に載る地名（例：東京都）" />
           <div style=${{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-            <input value=${geoQuery} onChange=${(e) => setGeoQuery(e.target.value)} style=${{ ...S.input, flex: 1, minWidth: 140 }} placeholder="検索する地名（例：東京都、大阪府）" />
+            <input value=${geoQuery} onInput=${(e) => setGeoQuery(e.target.value)} style=${{ ...S.input, flex: 1, minWidth: 140 }} placeholder="検索する地名（例：東京都、大阪府）" />
             <button onClick=${runGeoSearch} disabled=${geoBusy} style=${{ padding: "9px 16px", background: INK, color: PAPER, border: "none", fontSize: 13 }}>${geoBusy ? "検索中…" : "検索"}</button>
           </div>
           ${geoResults.length > 0 && html`
@@ -759,7 +788,7 @@ function App() {
           <div style=${{ ...S.label, marginTop: 22 }}>書き出したものを読み込む</div>
           <textarea
             value=${importText}
-            onChange=${(e) => { setImportText(e.target.value); setImportMsg(""); }}
+            onInput=${(e) => { setImportText(e.target.value); setImportMsg(""); }}
             rows="3"
             placeholder="ここに「まるごと書き出す」の中身を貼る"
             style=${{ ...S.input, width: "100%", fontSize: 11, lineHeight: 1.5, fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace", resize: "vertical" }}
