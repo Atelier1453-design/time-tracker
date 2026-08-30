@@ -1,0 +1,22 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #F2F3F1;
+  min-height: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+#root {
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  box-sizing: border-box;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+button { font: inherit; cursor: pointer; }
+button:focus-visible { outline: 2px solid #16202B; outline-offset: 2px; }
+input:focus-visible, textarea:focus-visible { outline: 2px solid #16202B; outline-offset: 1px; }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important } }
