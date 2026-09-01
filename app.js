@@ -65,6 +65,7 @@ function App() {
   const [fixing, setFixing] = useState(null);
   const [lastStopped, setLastStopped] = useState(null); // { sessionId, activityId, at }
   const [probeEditing, setProbeEditing] = useState(null); // session id being edited in the probe panel
+  const [probeAdd, setProbeAdd] = useState(null); // { activityId, end } draft for "add a record here"
   const [endDraft, setEndDraft] = useState("");
   const [geoQuery, setGeoQuery] = useState("");
   const [geoResults, setGeoResults] = useState([]);
@@ -248,8 +249,18 @@ function App() {
     const ratio = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
     setProbe(viewDay + ratio * DAY);
     setProbeEditing(null);
+    setProbeAdd(null);
   };
   const probeHits = probe == null ? [] : day.filter((s) => s.from <= probe && s.to > probe);
+  const probeStart = probe == null ? null : Math.round(probe / 60000) * 60000;
+  const addAtProbe = () => {
+    if (!probeAdd || !probeAdd.activityId || !probeAdd.end) return;
+    const st = probeStart;
+    let en = onDay(startOfDay(st), probeAdd.end);
+    if (en <= st) en += DAY;
+    mutate(() => setSessions((p) => [...p, { id: uid(), activityId: probeAdd.activityId, start: st, end: en }]));
+    setProbeAdd(null);
+  };
 
   const chainStart = (() => {
     const ends = dayRecords.filter(valid).map((s) => s.end ?? now).filter((tt) => tt > viewDay && tt <= dayEnd);
@@ -597,7 +608,7 @@ function App() {
           <div style=${{ marginTop: 8, border: `1px solid ${RULE}`, background: CARD, padding: "10px 12px" }}>
             <div style=${{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: probeHits.length ? 8 : 0 }}>
               <span style=${{ fontSize: 18, fontVariantNumeric: "tabular-nums" }}>${hhmm(probe)}</span>
-              <button onClick=${() => { setProbe(null); setProbeEditing(null); }} style=${{ ...S.ghost, border: "none" }}>閉じる</button>
+              <button onClick=${() => { setProbe(null); setProbeEditing(null); setProbeAdd(null); }} style=${{ ...S.ghost, border: "none" }}>閉じる</button>
             </div>
             ${probeHits.length === 0 ? html`
               <div style=${{ fontSize: 12, color: MUTED }}>この時刻の記録はありません。</div>` : probeHits.map((s) => {
@@ -611,10 +622,30 @@ function App() {
                   <span style=${{ fontSize: 11, color: MUTED }}>${hhmm(s.from)}〜${s.end == null ? "" : hhmm(s.to)}</span>
                   <span style=${{ fontSize: 13, fontVariantNumeric: "tabular-nums", minWidth: 62, textAlign: "right" }}>${dur(probe - s.from)}</span>
                 </button>
-                ${editing && (s.end == null ? renderLiveFields(s, () => setProbeEditing(null)) : html`<div style=${{ marginBottom: 8 }}>${renderCompletedFields(s)}</div>`)}
+                ${editing && html`
+                  <div style=${{ marginBottom: 8 }}>
+                    ${s.end == null ? renderLiveFields(s, () => setProbeEditing(null)) : renderCompletedFields(s)}
+                    <button onClick=${() => { removeSession(s.id); setProbeEditing(null); }} style=${{ ...S.ghost, color: ALERT, borderColor: ALERT, width: "100%", padding: 8, marginTop: 8 }}>この記録を削除</button>
+                  </div>`}
               </div>`;
             })}
-            ${probeHits.length > 0 && html`<div style=${{ fontSize: 10, color: MUTED, marginTop: 6 }}>右の数字はこの時点までの経過時間。行動名をタップすると時刻を直せます。</div>`}
+            ${probeHits.length > 0 && html`<div style=${{ fontSize: 10, color: MUTED, marginTop: 6, marginBottom: 4 }}>右の数字はこの時点までの経過時間。行動名をタップすると時刻を直せます。</div>`}
+            ${probeAdd ? html`
+              <div style=${{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${RULE}` }}>
+                <div style=${{ fontSize: 11, color: MUTED, marginBottom: 6 }}>${hhmm(probeStart)}から記録を追加</div>
+                <div style=${{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                  ${activities.map((a) => html`
+                    <button key=${a.id} onClick=${() => setProbeAdd((d) => ({ ...d, activityId: a.id }))} style=${{ padding: "7px 12px", fontSize: 13, background: probeAdd.activityId === a.id ? a.color : "transparent", color: probeAdd.activityId === a.id ? "#fff" : INK, border: `2px solid ${a.color}` }}>${a.name}</button>`)}
+                </div>
+                <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>終了</span>
+                  <input type="time" value=${probeAdd.end || ""} onInput=${(e) => setProbeAdd((d) => ({ ...d, end: e.target.value }))} style=${S.input} />
+                  <button onClick=${addAtProbe} disabled=${!probeAdd.end} style=${{ padding: "7px 14px", background: probeAdd.end ? INK : RULE, color: PAPER, border: "none", fontSize: 12 }}>追加</button>
+                  <button onClick=${() => setProbeAdd(null)} style=${S.ghost}>やめる</button>
+                </div>
+              </div>` : html`
+              <button onClick=${() => setProbeAdd({ activityId: activities[0]?.id, end: "" })} style=${{ ...S.ghost, width: "100%", marginTop: probeHits.length > 0 ? 4 : 10, padding: 8, color: INK }}>＋ここに記録を追加</button>
+            `}
           </div>`}
       </div>
 
@@ -647,7 +678,7 @@ function App() {
         </div>`}
 
       ${isToday ? html`
-        <div style=${{ marginBottom: 14, display: "grid", gridTemplateColumns: `repeat(${style.buttonCols === 2 ? 2 : 1}, 1fr)`, gap: 8 }}>
+        <div style=${{ marginBottom: 14, display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
           ${activities.map((a) => {
             const on = isRunning(a.id);
             const live = running.find((s) => s.activityId === a.id);
@@ -655,8 +686,8 @@ function App() {
               <div key=${a.id} style=${{ display: "flex", background: on ? a.color : CARD, border: `1px solid ${on ? a.color : RULE}`, borderLeft: `6px solid ${a.color}`, color: on ? "#fff" : INK }}>
                 <button onClick=${() => tapMain(a.id)} style=${{ flex: 1, minWidth: 0, padding: "17px 10px", textAlign: "left", background: "transparent", border: "none", color: "inherit", fontSize: 15, letterSpacing: "0.04em", overflow: "hidden" }}>
                   ${a.name}
-                  <span style=${{ display: "block", fontSize: 10, letterSpacing: "0.1em", marginTop: 3, opacity: on ? 0.85 : 0.45, whiteSpace: style.buttonCols === 2 ? "normal" : "nowrap" }}>
-                    ${on ? (style.buttonCols === 2 ? `${hhmm(live.start)}〜 計測中` : `${hhmm(live.start)}〜 計測中 — 押すと終了`) : running.length ? "押すと切り替え" : "押すと開始"}
+                  <span style=${{ display: "block", fontSize: 10, letterSpacing: "0.1em", marginTop: 3, opacity: on ? 0.85 : 0.45 }}>
+                    ${on ? `${hhmm(live.start)}〜 計測中` : running.length ? "押すと切り替え" : "押すと開始"}
                   </span>
                 </button>
                 ${on ? html`
@@ -850,11 +881,6 @@ function App() {
             </div>`}
 
           <div style=${{ ...S.sectionTitle, margin: "32px 0 16px" }}>行動ボタン</div>
-          <div style=${{ ...S.label, marginTop: 0 }}>並び</div>
-          <div style=${{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
-            <button onClick=${() => mutate(() => setStyle((x) => ({ ...x, buttonCols: 1 })))} style=${pill((style.buttonCols ?? 1) === 1)}>1列</button>
-            <button onClick=${() => mutate(() => setStyle((x) => ({ ...x, buttonCols: 2 })))} style=${pill(style.buttonCols === 2)}>2列</button>
-          </div>
           <div style=${{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             ${activities.map((a) => {
               const open = editingActivity === a.id;
@@ -876,7 +902,7 @@ function App() {
               </div>
 
               ${ea.diary !== "off" && html`
-                <div style=${{ position: "sticky", top: 0, zIndex: 5, marginTop: 12, padding: "10px 12px", background: PAPER, border: `2px solid ${INK}`, fontSize: 14, lineHeight: 1.8, fontFamily: "'Hiragino Sans','Yu Gothic',system-ui,sans-serif", boxShadow: "0 2px 6px rgba(22,32,43,.10)" }}>
+                <div style=${{ position: "sticky", top: "max(76px, calc(env(safe-area-inset-top, 0px) + 24px))", zIndex: 5, marginTop: 12, padding: "10px 12px", background: PAPER, border: `2px solid ${INK}`, fontSize: 14, lineHeight: 1.8, fontFamily: "'Hiragino Sans','Yu Gothic',system-ui,sans-serif", boxShadow: "0 2px 6px rgba(22,32,43,.10)" }}>
                   <div style=${{ fontSize: 9, letterSpacing: "0.16em", color: MUTED, marginBottom: 3, fontFamily: "'Oswald',sans-serif" }}>できあがる文</div>
                   ${previewOf(style, ea, viewDay)}
                   ${ea.diary === "time" && ea.merge === false && html`
