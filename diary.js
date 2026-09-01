@@ -20,6 +20,8 @@ export const fullDateLabel = (t) => { const d = new Date(t); return `${d.getFull
 export const dateKey = (t) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 export const toTimeInput = (t) => { const d = new Date(t); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 export const onDay = (dayMs, value) => { const [h, m] = String(value).split(":").map(Number); const d = new Date(dayMs); d.setHours(h || 0, m || 0, 0, 0); return d.getTime(); };
+/* 時刻はそのままに、日付だけを "YYYY-MM-DD" に差し替える */
+export const onDate = (t, value) => { const [y, m, day] = String(value).split("-").map(Number); const d = new Date(t); if (y) d.setFullYear(y, (m || 1) - 1, day || 1); return d.getTime(); };
 export const uid = () => Math.random().toString(36).slice(2, 9);
 
 /* ctx = { style, viewDay, dayEnd, now, day, dayRecords, act }
