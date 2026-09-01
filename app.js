@@ -46,6 +46,7 @@ function App() {
   const [viewDay, setViewDay] = useState(() => startOfDay(Date.now()));
   const [loaded, setLoaded] = useState(false);
   const [panel, setPanel] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(null); // 設定タブ内、開いている小見出し（"diary" | "activities" | "data" | null）
   const [editingActivity, setEditingActivity] = useState(null);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [diary, setDiary] = useState(null);
@@ -256,6 +257,15 @@ function App() {
     setProbe(viewDay + ratio * DAY);
     setProbeEditing(null);
     setProbeAdd(null);
+  };
+  /* 縦線（probe）を「記録済み⇄未記録」の切り替わり目（区切り）に直接ジャンプさせる。
+     points は marks（viewDay・dayEnd・各記録のfrom/to）を並べたもの＝区切りの一覧。 */
+  const setProbeAt = (t) => { setProbe(t); setProbeEditing(null); setProbeAdd(null); };
+  const jumpProbe = (dir) => {
+    const next = dir > 0
+      ? points.find((p) => p > (probe ?? -Infinity))
+      : [...points].reverse().find((p) => p < (probe ?? Infinity));
+    if (next != null) setProbeAt(next);
   };
   const probeHits = probe == null ? [] : day.filter((s) => s.from <= probe && s.to > probe);
   const probeStart = probe == null ? null : Math.round(probe / 60000) * 60000;
@@ -600,6 +610,10 @@ function App() {
         <div style=${{ display: "flex", justifyContent: "space-between", fontSize: 10, color: MUTED, marginTop: 4, letterSpacing: "0.08em" }}>
           ${[0, 6, 12, 18, 24].map((hh) => html`<span key=${hh}>${hh}</span>`)}
         </div>
+        <div style=${{ display: "flex", gap: 6, marginTop: 6 }}>
+          <button onClick=${() => jumpProbe(-1)} disabled=${!points.some((p) => p < (probe ?? Infinity))} style=${{ ...S.ghost, flex: 1, padding: 7 }}>◀ 前の区切り</button>
+          <button onClick=${() => jumpProbe(1)} disabled=${!points.some((p) => p > (probe ?? -Infinity))} style=${{ ...S.ghost, flex: 1, padding: 7 }}>次の区切り ▶</button>
+        </div>
 
         ${probe != null && html`
           <div style=${{ marginTop: 8, border: `1px solid ${RULE}`, background: CARD, padding: "10px 12px" }}>
@@ -765,9 +779,13 @@ function App() {
         </div>`}
 
       ${panel === "settings" && html`
-        <div style=${{ ...S.card, marginTop: 14 }}>
-          <div style=${{ ...S.sectionTitle, marginBottom: 16 }}>日記全体の書き方</div>
-
+        <div style=${{ ...S.card, marginTop: 14, padding: "4px 14px 8px" }}>
+          <button onClick=${() => setSettingsOpen(settingsOpen === "diary" ? null : "diary")} aria-expanded=${settingsOpen === "diary"}
+            style=${{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 0", background: "transparent", border: "none", borderBottom: `${settingsOpen === "diary" ? 2 : 1}px solid ${settingsOpen === "diary" ? INK : RULE}`, fontSize: 13, letterSpacing: "0.1em", color: INK, cursor: "pointer" }}>
+            <span>日記全体の書き方</span><span style=${{ fontSize: 11, color: MUTED }}>${settingsOpen === "diary" ? "▲" : "▼"}</span>
+          </button>
+          ${settingsOpen === "diary" && html`
+          <div style=${{ paddingTop: 16 }}>
           <div style=${S.label}>文体</div>
           <div style=${{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 20 }}>
             <button onClick=${() => mutate(() => setStyle((x) => ({ ...x, tone: "polite" })))} style=${pill(style.tone === "polite")}>〜ました</button>
@@ -839,8 +857,14 @@ function App() {
                 ${weatherLocation ? html`天気の取得地点：<b>${weatherLocation.label}</b>` : "天気の場所が未設定です。検索して選んでください。"}
               </div>
             </div>`}
+          </div>`}
 
-          <div style=${{ ...S.sectionTitle, margin: "32px 0 16px" }}>行動ボタン</div>
+          <button onClick=${() => setSettingsOpen(settingsOpen === "activities" ? null : "activities")} aria-expanded=${settingsOpen === "activities"}
+            style=${{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 0", marginTop: 4, background: "transparent", border: "none", borderBottom: `${settingsOpen === "activities" ? 2 : 1}px solid ${settingsOpen === "activities" ? INK : RULE}`, fontSize: 13, letterSpacing: "0.1em", color: INK, cursor: "pointer" }}>
+            <span>行動ボタン</span><span style=${{ fontSize: 11, color: MUTED }}>${settingsOpen === "activities" ? "▲" : "▼"}</span>
+          </button>
+          ${settingsOpen === "activities" && html`
+          <div style=${{ paddingTop: 16 }}>
           <div style=${{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             ${activities.map((a) => {
               const open = editingActivity === a.id;
@@ -1000,8 +1024,14 @@ function App() {
                 <button onClick=${() => removeActivity(ea.id)} style=${{ ...S.ghost, color: ALERT, borderColor: ALERT, padding: 9, fontSize: 12 }}>この行動を削除</button>
               </div>
             </div>`}
+          </div>`}
 
-          <div style=${{ ...S.sectionTitle, margin: "32px 0 16px" }}>保存とデータ</div>
+          <button onClick=${() => setSettingsOpen(settingsOpen === "data" ? null : "data")} aria-expanded=${settingsOpen === "data"}
+            style=${{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 0", marginTop: 4, background: "transparent", border: "none", borderBottom: `${settingsOpen === "data" ? 2 : 1}px solid ${settingsOpen === "data" ? INK : RULE}`, fontSize: 13, letterSpacing: "0.1em", color: INK, cursor: "pointer" }}>
+            <span>保存とデータ</span><span style=${{ fontSize: 11, color: MUTED }}>${settingsOpen === "data" ? "▲" : "▼"}</span>
+          </button>
+          ${settingsOpen === "data" && html`
+          <div style=${{ paddingTop: 16 }}>
           <div style=${S.label}>保存の状態</div>
           <div style=${{ fontSize: 12, color: storageOK === false ? ALERT : INK, lineHeight: 1.7, border: `1px solid ${RULE}`, padding: "10px 12px", background: PAPER }}>
             ${storageOK === false
@@ -1038,6 +1068,7 @@ function App() {
             <button onClick=${replaceAll} disabled=${!importText.trim()} style=${{ ...S.ghost, color: importText.trim() ? ALERT : MUTED, borderColor: importText.trim() ? ALERT : RULE, padding: "9px 12px", fontSize: 12 }}>すべて置き換える</button>
           </div>
           ${importMsg && html`<div style=${{ fontSize: 11, color: MUTED, marginTop: 8 }}>${importMsg}</div>`}
+          </div>`}
         </div>`}
     </div>`;
 }
