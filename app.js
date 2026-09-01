@@ -63,6 +63,8 @@ function App() {
   const [dragging, setDragging] = useState(false);
   const [probe, setProbe] = useState(null);
   const [fixing, setFixing] = useState(null);
+  const [lastStopped, setLastStopped] = useState(null); // { sessionId, activityId, at }
+  const [probeEditing, setProbeEditing] = useState(null); // session id being edited in the probe panel
   const [endDraft, setEndDraft] = useState("");
   const [geoQuery, setGeoQuery] = useState("");
   const [geoResults, setGeoResults] = useState([]);
@@ -183,8 +185,32 @@ function App() {
       const b = exclusive ? prev.map((s) => (s.end == null ? { ...s, end: t } : s)) : prev;
       return [...b, { id: uid(), activityId: id, start: t, end: null }];
     }));
-  const stop = (id) => mutate(() => setSessions((p) => p.map((s) => (s.end == null && s.activityId === id ? { ...s, end: Date.now() } : s))));
-  const stopAll = () => mutate(() => setSessions((p) => p.map((s) => (s.end == null ? { ...s, end: Date.now() } : s))));
+  /* うっかりタップしてすぐ止めた（3秒未満）場合は、記録に残さず消す。
+     それ以外は普通に終了し、しばらく「元に戻す」を出せるようにする。 */
+  const stop = (id) => {
+    const target = sessions.find((s) => s.end == null && s.activityId === id);
+    if (!target) return;
+    const endAt = Date.now();
+    if (endAt - target.start < 3000) {
+      mutate(() => setSessions((p) => p.filter((s) => s.id !== target.id)));
+      setLastStopped(null);
+      return;
+    }
+    mutate(() => setSessions((p) => p.map((s) => (s.id === target.id ? { ...s, end: endAt } : s))));
+    setLastStopped({ sessionId: target.id, activityId: id, at: endAt });
+  };
+  const stopAll = () => {
+    const endAt = Date.now();
+    mutate(() => setSessions((p) => p
+      .filter((s) => !(s.end == null && endAt - s.start < 3000))
+      .map((s) => (s.end == null ? { ...s, end: endAt } : s))));
+    setLastStopped(null);
+  };
+  const undoStop = () => {
+    if (!lastStopped) return;
+    mutate(() => setSessions((p) => p.map((s) => (s.id === lastStopped.sessionId ? { ...s, end: null } : s))));
+    setLastStopped(null);
+  };
   const tapMain = (id) => (isRunning(id) ? stop(id) : start(id, running.length > 0));
 
   /* ── record editing ── */
@@ -221,6 +247,7 @@ function App() {
     const r = el.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
     setProbe(viewDay + ratio * DAY);
+    setProbeEditing(null);
   };
   const probeHits = probe == null ? [] : day.filter((s) => s.from <= probe && s.to > probe);
 
@@ -314,7 +341,7 @@ function App() {
   const copyDiary = async () => {
     try { await navigator.clipboard.writeText(diary); setCopied(true); setTimeout(() => setCopied(false), 1800); } catch (e) { setCopied(false); }
   };
-  useEffect(() => { setDiary(null); setSaved(false); setProbe(null); setFixing(null); }, [viewDay]);
+  useEffect(() => { setDiary(null); setSaved(false); setProbe(null); setFixing(null); setProbeEditing(null); }, [viewDay]);
 
   /* ── weather location search ── */
   const runGeoSearch = async () => {
@@ -431,6 +458,90 @@ function App() {
   };
   const pill = (on) => ({ padding: "7px 12px", fontSize: 12, background: on ? INK : "transparent", color: on ? PAPER : MUTED, border: `1px solid ${on ? INK : RULE}` });
 
+  /* 計測中の記録をその場で直す欄（計測中一覧・カラーバーの詳細から共通で使う） */
+  const renderLiveFields = (s, onClose) => {
+    const anc = anchorFor(s);
+    const nb = nextBoundary(s);
+    return html`
+      <div style=${{ background: CARD, border: `1px solid ${RULE}`, padding: "12px 12px 14px", marginTop: 8 }}>
+        <button
+          onClick=${() => !anc.aligned && snap(s.id, "start", anc.at)}
+          disabled=${anc.aligned}
+          style=${{ width: "100%", padding: 11, marginBottom: 10, background: anc.aligned ? "transparent" : INK, color: anc.aligned ? MUTED : PAPER, border: `1px solid ${anc.aligned ? RULE : INK}`, fontSize: 13 }}
+        >${anc.aligned ? "すでに直前の記録に接しています" : anc.fallback ? `直前に合わせる（記録がないので ${hhmm(anc.at)}）` : `直前に合わせる（${hhmm(anc.at)}）`}</button>
+
+        <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>開始</span>
+          <input type="time" value=${toTimeInput(s.start)} onInput=${(e) => setTime(s.id, "start", e.target.value)} style=${S.input} />
+          <button onClick=${() => nudgeMinutes(s.id, -15)} style=${S.ghost}>−15分</button>
+          <button onClick=${() => nudgeMinutes(s.id, -5)} style=${S.ghost}>−5分</button>
+          <button onClick=${() => nudgeMinutes(s.id, 5)} style=${S.ghost}>+5分</button>
+        </div>
+
+        <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>終了</span>
+          <input type="time" value=${endDraft} onInput=${(e) => setEndDraft(e.target.value)} style=${S.input} />
+          <button onClick=${() => setEndDraft(toTimeInput(Date.now()))} style=${S.ghost}>現時刻</button>
+          <button
+            onClick=${() => { if (endDraft) { snap(s.id, "end", onDay(startOfDay(s.start), endDraft)); onClose(); } }}
+            disabled=${!endDraft}
+            style=${{ padding: "7px 14px", background: endDraft ? INK : RULE, color: PAPER, border: "none", fontSize: 12 }}
+          >この時刻で終了</button>
+        </div>
+
+        <button
+          onClick=${() => nb != null && snap(s.id, "end", nb)}
+          disabled=${nb == null}
+          style=${{ width: "100%", padding: 10, background: "transparent", color: nb != null ? INK : MUTED, border: `1px solid ${nb != null ? INK : RULE}`, fontSize: 12, marginBottom: 10 }}
+        >${nb != null ? `直後に合わせて終了（${hhmm(nb)}）` : "直後の記録がありません"}</button>
+
+        <div style=${{ fontSize: 11, color: MUTED, marginBottom: 5 }}>メモ</div>
+        <input
+          value=${s.memo || ""}
+          onInput=${(e) => setMemo(s.id, e.target.value)}
+          placeholder="日記の文の最後に（　）で入ります"
+          style=${{ ...S.input, width: "100%", padding: 8, marginBottom: 10, fontFamily: "'Hiragino Sans','Yu Gothic',system-ui,sans-serif" }}
+        />
+        <button onClick=${onClose} style=${{ ...S.ghost, width: "100%", padding: 8 }}>閉じる</button>
+      </div>`;
+  };
+
+  /* 終わった記録をその場で直す欄（「時間を修正」タブ・カラーバーの詳細から共通で使う） */
+  const renderCompletedFields = (s) => {
+    const anc = anchorFor(s), nb = nextBoundary(s), broken = !valid(s);
+    return html`
+      <div>
+        <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
+          <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>開始</span>
+          <input type="time" value=${toTimeInput(s.start)} onInput=${(e) => setTime(s.id, "start", e.target.value)} style=${S.input} />
+          <span style=${{ fontSize: 10, color: MUTED }}>${dateLabel(s.start)}</span>
+          <button onClick=${() => nudgeDay(s.id, "start", -1)} style=${S.ghost}>−1日</button>
+          ${!anc.aligned && html`<button onClick=${() => snap(s.id, "start", anc.at)} style=${{ ...S.ghost, color: INK }}>直前に合わせる（${hhmm(anc.at)}）</button>`}
+        </div>
+        <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>終了</span>
+          ${s.end == null ? html`<span style=${{ fontSize: 12, color: MUTED }}>計測中</span>` : html`
+            <input type="time" value=${toTimeInput(s.end)} onInput=${(e) => setTime(s.id, "end", e.target.value)} style=${S.input} />
+            <span style=${{ fontSize: 10, color: MUTED }}>${dateLabel(s.end)}</span>
+            <button onClick=${() => nudgeDay(s.id, "end", -1)} style=${S.ghost}>−1日</button>
+            <button onClick=${() => nudgeDay(s.id, "end", 1)} style=${S.ghost}>+1日</button>
+            ${nb != null && html`<button onClick=${() => snap(s.id, "end", nb)} style=${{ ...S.ghost, color: INK }}>直後に合わせる（${hhmm(nb)}）</button>`}
+          `}
+        </div>
+        <input
+          value=${s.memo || ""}
+          onInput=${(e) => setMemo(s.id, e.target.value)}
+          placeholder="メモ"
+          style=${{ ...S.input, width: "100%", padding: 7, marginTop: 8, fontFamily: "'Hiragino Sans','Yu Gothic',system-ui,sans-serif" }}
+        />
+        ${broken && html`
+          <div style=${{ fontSize: 11, color: ALERT, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
+            終了が開始より前です。
+            <button onClick=${() => fixEnd(s.id)} style=${{ ...S.ghost, color: ALERT, borderColor: ALERT }}>翌日の終了にする</button>
+          </div>`}
+      </div>`;
+  };
+
   if (!loaded) return html`<div style=${{ ...S.shell, color: MUTED, fontSize: 13 }}>記録を読み込んでいます…</div>`;
 
   const TABS = [["analysis", "分析"], ["records", "時間を修正"], ["settings", "設定"]];
@@ -486,27 +597,38 @@ function App() {
           <div style=${{ marginTop: 8, border: `1px solid ${RULE}`, background: CARD, padding: "10px 12px" }}>
             <div style=${{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: probeHits.length ? 8 : 0 }}>
               <span style=${{ fontSize: 18, fontVariantNumeric: "tabular-nums" }}>${hhmm(probe)}</span>
-              <button onClick=${() => setProbe(null)} style=${{ ...S.ghost, border: "none" }}>閉じる</button>
+              <button onClick=${() => { setProbe(null); setProbeEditing(null); }} style=${{ ...S.ghost, border: "none" }}>閉じる</button>
             </div>
             ${probeHits.length === 0 ? html`
-              <div style=${{ fontSize: 12, color: MUTED }}>この時刻の記録はありません。</div>` : probeHits.map((s) => html`
-              <div key=${s.id} style=${{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
-                <span style=${{ width: 8, height: 18, background: act(s.activityId)?.color, flexShrink: 0 }} />
-                <span style=${{ fontSize: 13, flex: 1 }}>${act(s.activityId)?.name}</span>
-                <span style=${{ fontSize: 11, color: MUTED }}>${hhmm(s.from)}〜${s.end == null ? "" : hhmm(s.to)}</span>
-                <span style=${{ fontSize: 13, fontVariantNumeric: "tabular-nums", minWidth: 62, textAlign: "right" }}>${dur(probe - s.from)}</span>
-              </div>`)}
-            ${probeHits.length > 0 && html`<div style=${{ fontSize: 10, color: MUTED, marginTop: 6 }}>この時点までの経過時間です。</div>`}
+              <div style=${{ fontSize: 12, color: MUTED }}>この時刻の記録はありません。</div>` : probeHits.map((s) => {
+              const editing = probeEditing === s.id;
+              return html`
+              <div key=${s.id}>
+                <button onClick=${() => { const next = editing ? null : s.id; setProbeEditing(next); setEndDraft(""); }}
+                  style=${{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", width: "100%", background: "transparent", border: "none", textAlign: "left", color: "inherit" }}>
+                  <span style=${{ width: 8, height: 18, background: act(s.activityId)?.color, flexShrink: 0 }} />
+                  <span style=${{ fontSize: 13, flex: 1, textDecoration: editing ? "underline" : "none" }}>${act(s.activityId)?.name}</span>
+                  <span style=${{ fontSize: 11, color: MUTED }}>${hhmm(s.from)}〜${s.end == null ? "" : hhmm(s.to)}</span>
+                  <span style=${{ fontSize: 13, fontVariantNumeric: "tabular-nums", minWidth: 62, textAlign: "right" }}>${dur(probe - s.from)}</span>
+                </button>
+                ${editing && (s.end == null ? renderLiveFields(s, () => setProbeEditing(null)) : html`<div style=${{ marginBottom: 8 }}>${renderCompletedFields(s)}</div>`)}
+              </div>`;
+            })}
+            ${probeHits.length > 0 && html`<div style=${{ fontSize: 10, color: MUTED, marginTop: 6 }}>右の数字はこの時点までの経過時間。行動名をタップすると時刻を直せます。</div>`}
           </div>`}
       </div>
+
+      ${lastStopped && now - lastStopped.at < 8000 && html`
+        <div style=${{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "10px 12px", marginBottom: 10, background: CARD, border: `1px solid ${RULE}` }}>
+          <span style=${{ fontSize: 12 }}>「${act(lastStopped.activityId)?.name}」の記録を止めました。</span>
+          <button onClick=${undoStop} style=${{ padding: "6px 12px", background: INK, color: PAPER, border: "none", fontSize: 12, flexShrink: 0 }}>元に戻す</button>
+        </div>`}
 
       ${isToday && running.length > 0 && html`
         <div style=${{ marginBottom: 14 }}>
           ${running.map((s) => {
             const a = act(s.activityId);
             const open = fixing === s.id;
-            const anc = anchorFor(s);
-            const nb = nextBoundary(s);
             return html`
               <div key=${s.id} style=${{ borderBottom: `1px solid ${RULE}` }}>
                 <div style=${{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0" }}>
@@ -518,72 +640,30 @@ function App() {
                   >${hhmm(s.start)}〜</button>
                   <span style=${{ fontSize: 18, fontWeight: 300, fontVariantNumeric: "tabular-nums" }}>${clock(now - s.start)}</span>
                 </div>
-
-                ${open && html`
-                  <div style=${{ background: CARD, border: `1px solid ${RULE}`, padding: "12px 12px 14px", marginBottom: 10 }}>
-                    <button
-                      onClick=${() => !anc.aligned && snap(s.id, "start", anc.at)}
-                      disabled=${anc.aligned}
-                      style=${{ width: "100%", padding: 11, marginBottom: 10, background: anc.aligned ? "transparent" : INK, color: anc.aligned ? MUTED : PAPER, border: `1px solid ${anc.aligned ? RULE : INK}`, fontSize: 13 }}
-                    >${anc.aligned ? "すでに直前の記録に接しています" : anc.fallback ? `直前に合わせる（記録がないので ${hhmm(anc.at)}）` : `直前に合わせる（${hhmm(anc.at)}）`}</button>
-
-                    <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
-                      <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>開始</span>
-                      <input type="time" value=${toTimeInput(s.start)} onInput=${(e) => setTime(s.id, "start", e.target.value)} style=${S.input} />
-                      <button onClick=${() => nudgeMinutes(s.id, -15)} style=${S.ghost}>−15分</button>
-                      <button onClick=${() => nudgeMinutes(s.id, -5)} style=${S.ghost}>−5分</button>
-                      <button onClick=${() => nudgeMinutes(s.id, 5)} style=${S.ghost}>+5分</button>
-                    </div>
-
-                    <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
-                      <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>終了</span>
-                      <input type="time" value=${endDraft} onInput=${(e) => setEndDraft(e.target.value)} style=${S.input} />
-                      <button onClick=${() => setEndDraft(toTimeInput(Date.now()))} style=${S.ghost}>現時刻</button>
-                      <button
-                        onClick=${() => { if (endDraft) { snap(s.id, "end", onDay(startOfDay(s.start), endDraft)); setFixing(null); } }}
-                        disabled=${!endDraft}
-                        style=${{ padding: "7px 14px", background: endDraft ? INK : RULE, color: PAPER, border: "none", fontSize: 12 }}
-                      >この時刻で終了</button>
-                    </div>
-
-                    <button
-                      onClick=${() => nb != null && snap(s.id, "end", nb)}
-                      disabled=${nb == null}
-                      style=${{ width: "100%", padding: 10, background: "transparent", color: nb != null ? INK : MUTED, border: `1px solid ${nb != null ? INK : RULE}`, fontSize: 12, marginBottom: 10 }}
-                    >${nb != null ? `直後に合わせて終了（${hhmm(nb)}）` : "直後の記録がありません"}</button>
-
-                    <div style=${{ fontSize: 11, color: MUTED, marginBottom: 5 }}>メモ</div>
-                    <input
-                      value=${s.memo || ""}
-                      onInput=${(e) => setMemo(s.id, e.target.value)}
-                      placeholder="日記の文の最後に（　）で入ります"
-                      style=${{ ...S.input, width: "100%", padding: 8, marginBottom: 10, fontFamily: "'Hiragino Sans','Yu Gothic',system-ui,sans-serif" }}
-                    />
-                    <button onClick=${() => setFixing(null)} style=${{ ...S.ghost, width: "100%", padding: 8 }}>閉じる</button>
-                  </div>`}
+                ${open && renderLiveFields(s, () => setFixing(null))}
               </div>`;
           })}
           ${running.length > 1 && html`<button onClick=${stopAll} style=${{ ...S.ghost, width: "100%", marginTop: 8, padding: 7 }}>すべて終了</button>`}
         </div>`}
 
       ${isToday ? html`
-        <div style=${{ marginBottom: 14 }}>
+        <div style=${{ marginBottom: 14, display: "grid", gridTemplateColumns: `repeat(${style.buttonCols === 2 ? 2 : 1}, 1fr)`, gap: 8 }}>
           ${activities.map((a) => {
             const on = isRunning(a.id);
             const live = running.find((s) => s.activityId === a.id);
             return html`
-              <div key=${a.id} style=${{ display: "flex", marginBottom: 8, background: on ? a.color : CARD, border: `1px solid ${on ? a.color : RULE}`, borderLeft: `6px solid ${a.color}`, color: on ? "#fff" : INK }}>
-                <button onClick=${() => tapMain(a.id)} style=${{ flex: 1, padding: "17px 12px", textAlign: "left", background: "transparent", border: "none", color: "inherit", fontSize: 15, letterSpacing: "0.04em" }}>
+              <div key=${a.id} style=${{ display: "flex", background: on ? a.color : CARD, border: `1px solid ${on ? a.color : RULE}`, borderLeft: `6px solid ${a.color}`, color: on ? "#fff" : INK }}>
+                <button onClick=${() => tapMain(a.id)} style=${{ flex: 1, minWidth: 0, padding: "17px 10px", textAlign: "left", background: "transparent", border: "none", color: "inherit", fontSize: 15, letterSpacing: "0.04em", overflow: "hidden" }}>
                   ${a.name}
-                  <span style=${{ display: "block", fontSize: 10, letterSpacing: "0.12em", marginTop: 3, opacity: on ? 0.85 : 0.45 }}>
-                    ${on ? `${hhmm(live.start)}〜 計測中 — 押すと終了` : running.length ? "押すと切り替え" : "押すと開始"}
+                  <span style=${{ display: "block", fontSize: 10, letterSpacing: "0.1em", marginTop: 3, opacity: on ? 0.85 : 0.45, whiteSpace: style.buttonCols === 2 ? "normal" : "nowrap" }}>
+                    ${on ? (style.buttonCols === 2 ? `${hhmm(live.start)}〜 計測中` : `${hhmm(live.start)}〜 計測中 — 押すと終了`) : running.length ? "押すと切り替え" : "押すと開始"}
                   </span>
                 </button>
                 ${on ? html`
-                  <button onClick=${() => stop(a.id)} aria-label=${`${a.name}を終了`} style=${{ width: 62, background: "rgba(0,0,0,.16)", border: "none", color: "#fff", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3 }}>
+                  <button onClick=${() => stop(a.id)} aria-label=${`${a.name}を終了`} style=${{ width: 52, flexShrink: 0, background: "rgba(0,0,0,.16)", border: "none", color: "#fff", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3 }}>
                     <${IconStop} /><span style=${{ fontSize: 10, letterSpacing: "0.1em" }}>終了</span>
                   </button>` : html`
-                  <button onClick=${() => start(a.id, false)} aria-label=${`${a.name}を同時に開始`} title="いまの計測を続けたまま、並行して始める" style=${{ width: 62, background: running.length ? "rgba(22,32,43,.05)" : "transparent", border: "none", borderLeft: `1px solid ${RULE}`, color: INK, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3 }}>
+                  <button onClick=${() => start(a.id, false)} aria-label=${`${a.name}を同時に開始`} title="いまの計測を続けたまま、並行して始める" style=${{ width: 52, flexShrink: 0, background: running.length ? "rgba(22,32,43,.05)" : "transparent", border: "none", borderLeft: `1px solid ${RULE}`, color: INK, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3 }}>
                     <${IconParallel} /><span style=${{ fontSize: 10, letterSpacing: "0.08em", color: MUTED }}>同時</span>
                   </button>`}
               </div>`;
@@ -680,7 +760,7 @@ function App() {
           <div style=${{ ...S.label, marginTop: 24 }}>${dateLabel(viewDay)}の記録</div>
           ${dayRecords.length === 0 && html`<div style=${{ fontSize: 13, color: MUTED }}>記録がありません。</div>`}
           ${dayRecords.map((s) => {
-            const anc = anchorFor(s), nb = nextBoundary(s), broken = !valid(s);
+            const broken = !valid(s);
             return html`
               <div key=${s.id} style=${{ padding: "10px 0", borderBottom: `1px solid ${RULE}`, background: broken ? "rgba(176,58,46,.06)" : "transparent" }}>
                 <div style=${{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
@@ -688,34 +768,7 @@ function App() {
                   <span style=${{ fontSize: 14, flex: 1 }}>${act(s.activityId)?.name}</span>
                   <button onClick=${() => removeSession(s.id)} style=${S.ghost}>削除</button>
                 </div>
-                <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
-                  <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>開始</span>
-                  <input type="time" value=${toTimeInput(s.start)} onInput=${(e) => setTime(s.id, "start", e.target.value)} style=${S.input} />
-                  <span style=${{ fontSize: 10, color: MUTED }}>${dateLabel(s.start)}</span>
-                  <button onClick=${() => nudgeDay(s.id, "start", -1)} style=${S.ghost}>−1日</button>
-                  ${!anc.aligned && html`<button onClick=${() => snap(s.id, "start", anc.at)} style=${{ ...S.ghost, color: INK }}>直前に合わせる（${hhmm(anc.at)}）</button>`}
-                </div>
-                <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                  <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>終了</span>
-                  ${s.end == null ? html`<span style=${{ fontSize: 12, color: MUTED }}>計測中</span>` : html`
-                    <input type="time" value=${toTimeInput(s.end)} onInput=${(e) => setTime(s.id, "end", e.target.value)} style=${S.input} />
-                    <span style=${{ fontSize: 10, color: MUTED }}>${dateLabel(s.end)}</span>
-                    <button onClick=${() => nudgeDay(s.id, "end", -1)} style=${S.ghost}>−1日</button>
-                    <button onClick=${() => nudgeDay(s.id, "end", 1)} style=${S.ghost}>+1日</button>
-                    ${nb != null && html`<button onClick=${() => snap(s.id, "end", nb)} style=${{ ...S.ghost, color: INK }}>直後に合わせる（${hhmm(nb)}）</button>`}
-                  `}
-                </div>
-                <input
-                  value=${s.memo || ""}
-                  onInput=${(e) => setMemo(s.id, e.target.value)}
-                  placeholder="メモ"
-                  style=${{ ...S.input, width: "100%", padding: 7, marginTop: 8, fontFamily: "'Hiragino Sans','Yu Gothic',system-ui,sans-serif" }}
-                />
-                ${broken && html`
-                  <div style=${{ fontSize: 11, color: ALERT, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
-                    終了が開始より前です。
-                    <button onClick=${() => fixEnd(s.id)} style=${{ ...S.ghost, color: ALERT, borderColor: ALERT }}>翌日の終了にする</button>
-                  </div>`}
+                ${renderCompletedFields(s)}
               </div>`;
           })}
         </div>`}
@@ -797,6 +850,11 @@ function App() {
             </div>`}
 
           <div style=${{ ...S.sectionTitle, margin: "32px 0 16px" }}>行動ボタン</div>
+          <div style=${{ ...S.label, marginTop: 0 }}>並び</div>
+          <div style=${{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+            <button onClick=${() => mutate(() => setStyle((x) => ({ ...x, buttonCols: 1 })))} style=${pill((style.buttonCols ?? 1) === 1)}>1列</button>
+            <button onClick=${() => mutate(() => setStyle((x) => ({ ...x, buttonCols: 2 })))} style=${pill(style.buttonCols === 2)}>2列</button>
+          </div>
           <div style=${{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             ${activities.map((a) => {
               const open = editingActivity === a.id;

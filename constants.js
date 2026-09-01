@@ -78,7 +78,7 @@ export const DEFAULT_ACTIVITIES = [
   { ...base, id: "a6", name: "休憩", color: "#7C8A7E", diary: "name", endWord: END_PRESETS[2] },
 ];
 
-export const DEFAULT_STYLE = { tone: "polite", timeFmt: "colon", timeSys: "24", weather: true, intro: true, summary: true };
+export const DEFAULT_STYLE = { tone: "polite", timeFmt: "colon", timeSys: "24", weather: true, intro: true, summary: true, buttonCols: 1 };
 export const OVERLAP_WORDS = ["", "の途中で", "の途中から", "の間に", "をしながら", "と同時に"];
 export const DEFAULT_TEMPLATES = [{ id: "t1", label: "締めの一文", text: "今日もおつかれさま。", auto: "none" }];
 
