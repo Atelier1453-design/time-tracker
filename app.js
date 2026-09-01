@@ -48,7 +48,6 @@ function App() {
   const [panel, setPanel] = useState(null);
   const [editingActivity, setEditingActivity] = useState(null);
   const [editingTemplate, setEditingTemplate] = useState(null);
-  const [draft, setDraft] = useState({ activityId: "", start: "", end: "", parallel: false, manual: false });
   const [diary, setDiary] = useState(null);
   const [diaryBusy, setDiaryBusy] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -262,21 +261,6 @@ function App() {
     setProbeAdd(null);
   };
 
-  const chainStart = (() => {
-    const ends = dayRecords.filter(valid).map((s) => s.end ?? now).filter((tt) => tt > viewDay && tt <= dayEnd);
-    return ends.length ? Math.max(...ends) : null;
-  })();
-  const draftActivity = draft.activityId || activities[0]?.id;
-  const useChain = chainStart != null && !draft.manual && !draft.parallel;
-  const effectiveStart = useChain ? chainStart : onDay(viewDay, draft.start || "09:00");
-  const addManual = () => {
-    if (!draftActivity || !draft.end) return;
-    const st = effectiveStart;
-    let en = onDay(startOfDay(st), draft.end);
-    if (en <= st) en += DAY;
-    mutate(() => setSessions((p) => [...p, { id: uid(), activityId: draftActivity, start: st, end: en }]));
-    setDraft((d) => ({ ...d, end: "", manual: false, parallel: false }));
-  };
 
   /* ── activities & templates ── */
   const patchActivity = (id, patch) => mutate(() => setActivities((p) => p.map((a) => (a.id === id ? { ...a, ...patch } : a))));
@@ -517,7 +501,7 @@ function App() {
       </div>`;
   };
 
-  /* 終わった記録をその場で直す欄（「時間を修正」タブ・カラーバーの詳細から共通で使う） */
+  /* 終わった記録をその場で直す欄（カラーバーの詳細から使う） */
   const renderCompletedFields = (s) => {
     const anc = anchorFor(s), nb = nextBoundary(s), broken = !valid(s);
     return html`
@@ -555,7 +539,7 @@ function App() {
 
   if (!loaded) return html`<div style=${{ ...S.shell, color: MUTED, fontSize: 13 }}>記録を読み込んでいます…</div>`;
 
-  const TABS = [["analysis", "分析"], ["records", "時間を修正"], ["settings", "設定"]];
+  const TABS = [["analysis", "分析"], ["settings", "設定"]];
   const hasSaved = diaries[dateKey(viewDay)] != null;
   const ea = editingActivity ? act(editingActivity) : null;
   const et = editingTemplate ? templates.find((x) => x.id === editingTemplate) : null;
@@ -701,7 +685,7 @@ function App() {
           })}
         </div>` : html`
         <div style=${{ border: `1px dashed ${RULE}`, padding: "14px 12px", fontSize: 12, color: MUTED, marginBottom: 14, lineHeight: 1.7 }}>
-          ${isFuture ? "未来の日付です。" : "過去の日付です。"}計測の開始はできません。記録は「時間を修正」から手入力で足せます。
+          ${isFuture ? "未来の日付です。" : "過去の日付です。"}計測の開始はできません。カラーバーをなぞって出る欄の「＋ここに記録を追加」から手入力で足せます。
         </div>`}
 
       <button onClick=${openDiary} disabled=${diaryBusy} style=${{ width: "100%", padding: 16, background: diaryBusy ? MUTED : INK, color: PAPER, border: "none", fontSize: 15, letterSpacing: "0.14em", marginBottom: 14 }}>
@@ -758,50 +742,6 @@ function App() {
               </div>
               <div style=${{ height: 8, background: "#E7E9E5" }}><div style=${{ width: `${(x.ms / maxWeek) * 100}%`, height: "100%", background: x.color }} /></div>
             </div>`)}
-        </div>`}
-
-      ${panel === "records" && html`
-        <div style=${{ ...S.card, marginTop: 14 }}>
-          <div style=${S.label}>記録を足す</div>
-          <div style=${{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
-            ${activities.map((a) => {
-              const on = draftActivity === a.id;
-              return html`<button key=${a.id} onClick=${() => setDraft((d) => ({ ...d, activityId: a.id }))} style=${{ padding: "8px 13px", fontSize: 13, background: on ? a.color : "transparent", color: on ? "#fff" : INK, border: `2px solid ${a.color}` }}>${a.name}</button>`;
-            })}
-          </div>
-          <div style=${{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-            <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>開始</span>
-            ${useChain ? html`
-              <span style=${{ fontSize: 15, fontVariantNumeric: "tabular-nums" }}>${hhmm(chainStart)}</span>
-              <span style=${{ fontSize: 11, color: MUTED }}>直前の記録の続き</span>
-              <button onClick=${() => setDraft((d) => ({ ...d, manual: true, start: toTimeInput(chainStart) }))} style=${S.ghost}>時刻を変える</button>
-              ` : html`
-              <input type="time" value=${draft.start || "09:00"} onInput=${(e) => setDraft((d) => ({ ...d, start: e.target.value }))} style=${S.input} />
-              ${chainStart != null && !draft.parallel && html`<button onClick=${() => setDraft((d) => ({ ...d, manual: false }))} style=${S.ghost}>直前の続きに戻す</button>`}
-              `}
-          </div>
-          <div style=${{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-            <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>終了</span>
-            <input type="time" value=${draft.end} onInput=${(e) => setDraft((d) => ({ ...d, end: e.target.value }))} style=${S.input} />
-            <button onClick=${addManual} disabled=${!draft.end} style=${{ padding: "9px 18px", background: draft.end ? INK : RULE, color: PAPER, border: "none", fontSize: 13 }}>追加</button>
-          </div>
-          <button onClick=${() => setDraft((d) => ({ ...d, parallel: !d.parallel, manual: !d.parallel }))} style=${pill(draft.parallel)}>同時進行の記録として足す</button>
-          <div style=${{ fontSize: 10, color: MUTED, marginTop: 8, lineHeight: 1.6 }}>終了が開始より前なら、翌日にまたがる記録として追加します。<br />続けて足していくと、そのつど直前の終了時刻から始まります。</div>
-
-          <div style=${{ ...S.label, marginTop: 24 }}>${dateLabel(viewDay)}の記録</div>
-          ${dayRecords.length === 0 && html`<div style=${{ fontSize: 13, color: MUTED }}>記録がありません。</div>`}
-          ${dayRecords.map((s) => {
-            const broken = !valid(s);
-            return html`
-              <div key=${s.id} style=${{ padding: "10px 0", borderBottom: `1px solid ${RULE}`, background: broken ? "rgba(176,58,46,.06)" : "transparent" }}>
-                <div style=${{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                  <span style=${{ width: 8, height: 20, background: act(s.activityId)?.color, flexShrink: 0 }} />
-                  <span style=${{ fontSize: 14, flex: 1 }}>${act(s.activityId)?.name}</span>
-                  <button onClick=${() => removeSession(s.id)} style=${S.ghost}>削除</button>
-                </div>
-                ${renderCompletedFields(s)}
-              </div>`;
-          })}
         </div>`}
 
       ${panel === "settings" && html`
