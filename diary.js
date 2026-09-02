@@ -154,16 +154,18 @@ export const sentencesFor = (ctx, a) => {
   return out;
 };
 
+const cleanPunct = (text) => text.replace(/、+(?=。)/g, "");
+
 export const previewOf = (style, a, viewDay) => {
   const st = viewDay + 9 * 3600000, en = viewDay + 18 * 3600000;
   if (a.diary === "off") return "（日記には出ません）";
-  if (a.diary === "name") return `${nameChunk(a)}${finalOf(style, a.endWord)}。`;
+  if (a.diary === "name") return cleanPunct(`${nameChunk(a)}${finalOf(style, a.endWord)}。`);
   if (a.merge !== false)
-    return `${mergedSentence(style, a, [{ from: st, to: en }])}${a.showTotal === false ? "" : "（合計9時間）"}`;
-  return oneSentence(style, a, st, en, true, true);
+    return cleanPunct(`${mergedSentence(style, a, [{ from: st, to: en }])}${a.showTotal === false ? "" : "（合計9時間）"}`);
+  return cleanPunct(oneSentence(style, a, st, en, true, true));
 };
 /* 日をまたいで開始だけがその日に入っている例 */
-export const previewHalf = (style, a, viewDay) => oneSentence(style, a, viewDay + 23 * 3600000, viewDay + 30 * 3600000, true, false);
+export const previewHalf = (style, a, viewDay) => cleanPunct(oneSentence(style, a, viewDay + 23 * 3600000, viewDay + 30 * 3600000, true, false));
 
 export const fillPlaceholders = (text, viewDay, w) =>
   text.replace(/\{日付\}/g, fullDateLabel(viewDay)).replace(/\{天気\}/g, w?.summary ?? "").replace(/\{曜日\}/g, WEEK[new Date(viewDay).getDay()]);
@@ -201,7 +203,9 @@ export const composeDiary = (ctx, activitiesByTime, w) => {
       }
       if (names.length) body.push(`今日は${names.join("、")}${t_(style, "をしました。", "をした。")}`);
     }
-    for (const t of timed) body.push(t.text);
+    /* 行動名の助詞に「、」を選んだ時、文末の「。」の直前に来ると
+       「、。」と詰まってしまうことがあるので、その場合だけ「、」を外す */
+    for (const t of timed) body.push(t.text.replace(/、+(?=。)/g, ""));
     if (style.summary) {
       const sp = day.filter((s) => act(s.activityId)?.inIntro !== false);
       if (sp.length) {

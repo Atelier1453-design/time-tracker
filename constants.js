@@ -18,7 +18,7 @@ export const SWATCHES = [
 ];
 
 /* 名前のあとに付く助詞 */
-export const PARTICLES = ["を", "は", "が", "で", ""];
+export const PARTICLES = ["を", "は", "が", "で", "、", ""];
 export const SP_PARTICLES = ["に", "から", ""];
 export const EP_PARTICLES = ["に", "まで", ""];
 export const NAME_POS = [["head", "文頭"], ["mid", "文中"], ["tail", "文後"], ["none", "入れない"]];
