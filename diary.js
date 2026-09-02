@@ -104,6 +104,11 @@ const hostOf = (ctx, seg, a) => {
 
 const valid = (s) => s.end == null || s.end > s.start;
 
+/* それぞれの文に「並べる基準の時刻」を付けて返す（{time, text}の配列）。
+   前日から続く記録はその日の0:00にクリップされるので、行動ごとの
+   「その日はじめて」の時刻ではなく、文ごとの実際の時刻で全体を並べ替える。
+   そうしないと、前夜から続く記録の存在だけで、その行動の別の（本来もっと
+   遅い）記録までもが他の行動より不自然に早く書かれてしまう。 */
 export const sentencesFor = (ctx, a) => {
   const { style, viewDay, dayEnd, now, day, dayRecords } = ctx;
 
@@ -115,8 +120,8 @@ export const sentencesFor = (ctx, a) => {
     const out = [];
     const nested = [], plainSegs = [];
     segs.forEach((s) => { const h = hostOf(ctx, s, a); if (h) nested.push({ seg: s, host: h }); else plainSegs.push(s); });
-    if (plainSegs.length) out.push(`${nameChunk(a)}${finalOf(style, a.endWord)}${memoOf(plainSegs)}。`);
-    nested.forEach(({ seg, host }) => out.push(`${host.name}${a.overlap}${nameChunk(a)}${finalOf(style, a.endWord)}${memoOf([seg])}。`));
+    if (plainSegs.length) out.push({ time: plainSegs[0].from, text: `${nameChunk(a)}${finalOf(style, a.endWord)}${memoOf(plainSegs)}。` });
+    nested.forEach(({ seg, host }) => out.push({ time: seg.from, text: `${host.name}${a.overlap}${nameChunk(a)}${finalOf(style, a.endWord)}${memoOf([seg])}。` }));
     return out;
   }
 
@@ -129,9 +134,9 @@ export const sentencesFor = (ctx, a) => {
     segs.forEach((s) => { const h = hostOf(ctx, s, a); if (h) nested.push({ seg: s, host: h }); else plainSegs.push(s); });
     if (plainSegs.length) {
       const ms = plainSegs.reduce((n, x) => n + (x.to - x.from), 0);
-      out.push(`${mergedSentence(style, a, plainSegs)}${a.showTotal === false ? "" : `（合計${dur(ms)}）`}`);
+      out.push({ time: plainSegs[0].from, text: `${mergedSentence(style, a, plainSegs)}${a.showTotal === false ? "" : `（合計${dur(ms)}）`}` });
     }
-    nested.forEach(({ seg, host }) => out.push(`${host.name}${a.overlap}${strip(mergedSentence(style, a, [seg]))}。`));
+    nested.forEach(({ seg, host }) => out.push({ time: seg.from, text: `${host.name}${a.overlap}${strip(mergedSentence(style, a, [seg]))}。` }));
     return out;
   }
 
@@ -144,7 +149,7 @@ export const sentencesFor = (ctx, a) => {
     const clipped = day.find((x) => x.id === s.id);
     const host = clipped ? hostOf(ctx, clipped, a) : null;
     const body = oneSentence(style, a, s.start, end, hasStart, hasEnd, memoOf([s]));
-    out.push(host ? `${host.name}${a.overlap}${strip(body)}。` : body);
+    out.push({ time: clipped ? clipped.from : s.start, text: host ? `${host.name}${a.overlap}${strip(body)}。` : body });
   });
   return out;
 };
@@ -178,11 +183,25 @@ export const composeDiary = (ctx, activitiesByTime, w) => {
     body.push(t_(style, "この日の記録はありません。", "この日の記録はない。"));
   } else {
     const listed = activitiesByTime.filter((a) => a.diary !== "off");
+
+    /* 全ての行動の文を集めて、文ごとの実際の時刻で並べ替える */
+    const timed = [];
+    for (const a of listed) {
+      for (const entry of sentencesFor(ctx, a)) timed.push({ ...entry, activityId: a.id, activityName: a.name, inIntro: a.inIntro });
+    }
+    timed.sort((x, y) => x.time - y.time);
+
     if (style.intro) {
-      const names = listed.filter((a) => a.inIntro !== false).map((a) => a.name);
+      const seen = new Set();
+      const names = [];
+      for (const t of timed) {
+        if (t.inIntro === false || seen.has(t.activityId)) continue;
+        seen.add(t.activityId);
+        names.push(t.activityName);
+      }
       if (names.length) body.push(`今日は${names.join("、")}${t_(style, "をしました。", "をした。")}`);
     }
-    for (const a of listed) body.push(...sentencesFor(ctx, a));
+    for (const t of timed) body.push(t.text);
     if (style.summary) {
       const sp = day.filter((s) => act(s.activityId)?.inIntro !== false);
       if (sp.length) {
