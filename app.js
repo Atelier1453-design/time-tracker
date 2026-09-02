@@ -260,6 +260,11 @@ function App() {
     mutate(() => setSessions((p) => [...p, { id: uid(), activityId: probeAdd.activityId, start: st, end: en }]));
     setProbeAdd(null);
   };
+  const addRunningAtProbe = () => {
+    if (!probeAdd || !probeAdd.activityId) return;
+    mutate(() => setSessions((p) => [...p, { id: uid(), activityId: probeAdd.activityId, start: probeStart, end: null }]));
+    setProbeAdd(null);
+  };
 
 
   /* ── activities & templates ── */
@@ -599,13 +604,13 @@ function App() {
               const editing = probeEditing === s.id;
               return html`
               <div key=${s.id}>
-                <button onClick=${() => { const next = editing ? null : s.id; setProbeEditing(next); setEndDraft(""); }}
-                  style=${{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", width: "100%", background: "transparent", border: "none", textAlign: "left", color: "inherit" }}>
+                <div style=${{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
                   <span style=${{ width: 8, height: 18, background: act(s.activityId)?.color, flexShrink: 0 }} />
-                  <span style=${{ fontSize: 13, flex: 1, textDecoration: editing ? "underline" : "none" }}>${act(s.activityId)?.name}</span>
+                  <button onClick=${() => { const next = editing ? null : s.id; setProbeEditing(next); setEndDraft(""); }}
+                    style=${{ fontSize: 13, flex: 1, minWidth: 0, textAlign: "left", background: "transparent", border: "none", color: "inherit", textDecoration: editing ? "underline" : "none", padding: "4px 0" }}>${act(s.activityId)?.name}</button>
                   <span style=${{ fontSize: 11, color: MUTED }}>${hhmm(s.from)}〜${s.end == null ? "" : hhmm(s.to)}</span>
                   <span style=${{ fontSize: 13, fontVariantNumeric: "tabular-nums", minWidth: 62, textAlign: "right" }}>${dur(probe - s.from)}</span>
-                </button>
+                </div>
                 ${editing && html`
                   <div style=${{ marginBottom: 8 }}>
                     ${s.end == null ? renderLiveFields(s, () => setProbeEditing(null)) : renderCompletedFields(s)}
@@ -621,10 +626,13 @@ function App() {
                   ${activities.map((a) => html`
                     <button key=${a.id} onClick=${() => setProbeAdd((d) => ({ ...d, activityId: a.id }))} style=${{ padding: "7px 12px", fontSize: 13, background: probeAdd.activityId === a.id ? a.color : "transparent", color: probeAdd.activityId === a.id ? "#fff" : INK, border: `2px solid ${a.color}` }}>${a.name}</button>`)}
                 </div>
-                <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
                   <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>終了</span>
                   <input type="time" value=${probeAdd.end || ""} onInput=${(e) => setProbeAdd((d) => ({ ...d, end: e.target.value }))} style=${S.input} />
                   <button onClick=${addAtProbe} disabled=${!probeAdd.end} style=${{ padding: "7px 14px", background: probeAdd.end ? INK : RULE, color: PAPER, border: "none", fontSize: 12 }}>追加</button>
+                </div>
+                <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <button onClick=${addRunningAtProbe} style=${{ padding: "7px 14px", background: "transparent", color: INK, border: `1px solid ${INK}`, fontSize: 12 }}>計測中のまま追加</button>
                   <button onClick=${() => setProbeAdd(null)} style=${S.ghost}>やめる</button>
                 </div>
               </div>` : html`
