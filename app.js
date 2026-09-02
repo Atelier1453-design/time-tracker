@@ -41,6 +41,7 @@ function App() {
   const [startWords, setStartWords] = useState(START_PRESETS);
   const [endWords, setEndWords] = useState(END_PRESETS);
   const [overlapWords, setOverlapWords] = useState(OVERLAP_WORDS);
+  const [particles, setParticles] = useState(PARTICLES);
   const [newWord, setNewWord] = useState(null);
   const [now, setNow] = useState(Date.now());
   const [viewDay, setViewDay] = useState(() => startOfDay(Date.now()));
@@ -102,6 +103,7 @@ function App() {
             if (d.templates) setTemplates(d.templates);
             if (d.startWords?.length) setStartWords(d.startWords);
             if (d.endWords?.length) setEndWords(d.endWords);
+            if (d.particles?.length) setParticles(d.particles);
             const baseOverlapWords = d.overlapWords?.length ? d.overlapWords : OVERLAP_WORDS;
             setOverlapWords(migratedOverlap && !baseOverlapWords.includes(migratedOverlap) ? [...baseOverlapWords, migratedOverlap] : baseOverlapWords);
             setRestored(true);
@@ -116,13 +118,13 @@ function App() {
     if (!loaded || !dirty.current) return;
     (async () => {
       try {
-        await saveData(STORE_KEY, { activities, sessions, place, weatherLocation, weather, diaries, style, templates, startWords, endWords, overlapWords });
+        await saveData(STORE_KEY, { activities, sessions, place, weatherLocation, weather, diaries, style, templates, startWords, endWords, overlapWords, particles });
         setStorageOK(true);
       } catch (e) {
         setStorageOK(false);
       }
     })();
-  }, [activities, sessions, place, weatherLocation, weather, diaries, style, templates, startWords, endWords, overlapWords, loaded]);
+  }, [activities, sessions, place, weatherLocation, weather, diaries, style, templates, startWords, endWords, overlapWords, particles, loaded]);
 
   const mutate = (fn) => { dirty.current = true; editSeq.current += 1; fn(); };
 
@@ -298,11 +300,12 @@ function App() {
   const addWord = () => {
     if (!newWord) return;
     const { kind, join, plain, polite } = newWord;
-    if (kind === "overlap") {
+    if (kind === "overlap" || kind === "particle") {
       const w = join.trim();
-      if (!w || overlapWords.includes(w)) return setNewWord(null);
-      mutate(() => setOverlapWords((p) => [...p, w]));
-      if (ea) patchActivity(ea.id, { overlap: w });
+      const list = kind === "overlap" ? overlapWords : particles;
+      if (!w || list.includes(w)) return setNewWord(null);
+      mutate(() => (kind === "overlap" ? setOverlapWords((p) => [...p, w]) : setParticles((p) => [...p, w])));
+      if (ea) patchActivity(ea.id, kind === "overlap" ? { overlap: w } : { np: w });
       return setNewWord(null);
     }
     if (kind === "start" ? !join.trim() : !plain.trim()) return;
@@ -317,6 +320,7 @@ function App() {
     mutate(() => {
       if (kind === "start") setStartWords((p) => p.filter((x) => x.join !== w.join));
       else if (kind === "end") setEndWords((p) => p.filter((x) => x.plain !== w.plain));
+      else if (kind === "particle") setParticles((p) => p.filter((x) => x !== w));
       else setOverlapWords((p) => p.filter((x) => x !== w));
     });
 
@@ -384,7 +388,7 @@ function App() {
   };
 
   /* ── export / import ── */
-  const exportJSON = () => JSON.stringify({ app: "timetrack", version: 3, activities, sessions, place, weatherLocation, weather, diaries, style, templates, startWords, endWords, overlapWords }, null, 2);
+  const exportJSON = () => JSON.stringify({ app: "timetrack", version: 3, activities, sessions, place, weatherLocation, weather, diaries, style, templates, startWords, endWords, overlapWords, particles }, null, 2);
 
   const exportCSV = () => {
     const q = (v) => `"${String(v).replace(/"/g, '""')}"`;
@@ -439,6 +443,7 @@ function App() {
         if (d.templates) setTemplates(d.templates);
         if (d.startWords?.length) setStartWords(d.startWords);
         if (d.endWords?.length) setEndWords(d.endWords);
+        if (d.particles?.length) setParticles(d.particles);
         const baseOverlapWords = d.overlapWords?.length ? d.overlapWords : overlapWords;
         if (migratedOverlap && !baseOverlapWords.includes(migratedOverlap)) setOverlapWords([...baseOverlapWords, migratedOverlap]);
         else if (d.overlapWords?.length) setOverlapWords(d.overlapWords);
@@ -929,7 +934,12 @@ function App() {
                 ${ea.namePos !== "none" && html`
                   <div style=${{ fontSize: 10, color: MUTED, margin: "10px 0 5px" }}>行動名のあとに付く助詞</div>
                   <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    ${PARTICLES.map((pp) => html`<button key=${pp || "none"} onClick=${() => patchActivity(ea.id, { np: pp })} style=${pill((ea.np ?? "を") === pp)}>${pp || "なし"}</button>`)}
+                    ${particles.map((pp) => html`
+                      <span key=${pp || "none"} style=${{ display: "inline-flex" }}>
+                        <button onClick=${() => patchActivity(ea.id, { np: pp })} style=${pill((ea.np ?? "を") === pp)}>${pp || "なし"}</button>
+                        ${pp && !PARTICLES.includes(pp) && html`<button onClick=${() => removeWord("particle", pp)} aria-label="この助詞を削除" style=${{ ...S.ghost, borderLeft: "none", padding: "7px 6px" }}>×</button>`}
+                      </span>`)}
+                    <button onClick=${() => setNewWord({ kind: "particle", join: "", plain: "", polite: "" })} style=${{ ...S.ghost, padding: "7px 10px", borderStyle: "dashed" }}>＋追加</button>
                   </div>
                 `}
 
@@ -971,7 +981,12 @@ function App() {
               ${ea.diary === "name" && html`
                 <div style=${{ ...S.label, marginTop: 18 }}>行動名のあとに付く助詞</div>
                 <div style=${{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-                  ${PARTICLES.map((pp) => html`<button key=${pp || "none"} onClick=${() => patchActivity(ea.id, { np: pp })} style=${pill((ea.np ?? "を") === pp)}>${pp || "なし"}</button>`)}
+                  ${particles.map((pp) => html`
+                    <span key=${pp || "none"} style=${{ display: "inline-flex" }}>
+                      <button onClick=${() => patchActivity(ea.id, { np: pp })} style=${pill((ea.np ?? "を") === pp)}>${pp || "なし"}</button>
+                      ${pp && !PARTICLES.includes(pp) && html`<button onClick=${() => removeWord("particle", pp)} aria-label="この助詞を削除" style=${{ ...S.ghost, borderLeft: "none", padding: "7px 6px" }}>×</button>`}
+                    </span>`)}
+                  <button onClick=${() => setNewWord({ kind: "particle", join: "", plain: "", polite: "" })} style=${{ ...S.ghost, padding: "7px 10px", borderStyle: "dashed" }}>＋追加</button>
                 </div>
                 <div style=${S.label}>使う言葉</div>
                 <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -987,18 +1002,22 @@ function App() {
               ${newWord && html`
                 <div style=${{ marginTop: 12, padding: 12, background: PAPER, border: `1px solid ${INK}` }}>
                   <div style=${{ fontSize: 11, color: MUTED, marginBottom: 8 }}>
-                    ${newWord.kind === "start" ? "開始の言葉を作る" : newWord.kind === "end" ? "終了の言葉を作る" : "重なったときのつなぎ言葉を作る"}（ほかの行動でも選べるようになります）
+                    ${newWord.kind === "start" ? "開始の言葉を作る" : newWord.kind === "end" ? "終了の言葉を作る" : newWord.kind === "particle" ? "助詞を作る" : "重なったときのつなぎ言葉を作る"}（ほかの行動でも選べるようになります）
                   </div>
                   <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     ${newWord.kind === "overlap" && html`
                       <label style=${{ fontSize: 10, color: MUTED }}>つなぎ言葉
                         <input value=${newWord.join} onInput=${(e) => setNewWord({ ...newWord, join: e.target.value })} placeholder="の合間に" style=${{ ...S.input, display: "block", width: 140, marginTop: 3 }} /></label>
                     `}
+                    ${newWord.kind === "particle" && html`
+                      <label style=${{ fontSize: 10, color: MUTED }}>助詞
+                        <input value=${newWord.join} onInput=${(e) => setNewWord({ ...newWord, join: e.target.value })} placeholder="へ" style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
+                    `}
                     ${newWord.kind === "start" && html`
                       <label style=${{ fontSize: 10, color: MUTED }}>つなぐ形
                         <input value=${newWord.join} onInput=${(e) => setNewWord({ ...newWord, join: e.target.value })} placeholder="出かけて" style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
                     `}
-                    ${newWord.kind !== "overlap" && html`
+                    ${newWord.kind !== "overlap" && newWord.kind !== "particle" && html`
                       <label style=${{ fontSize: 10, color: MUTED }}>〜た形
                         <input value=${newWord.plain} onInput=${(e) => setNewWord({ ...newWord, plain: e.target.value })} placeholder="出かけた" style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
                       <label style=${{ fontSize: 10, color: MUTED }}>〜ました形

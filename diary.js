@@ -109,6 +109,13 @@ const valid = (s) => s.end == null || s.end > s.start;
    「その日はじめて」の時刻ではなく、文ごとの実際の時刻で全体を並べ替える。
    そうしないと、前夜から続く記録の存在だけで、その行動の別の（本来もっと
    遅い）記録までもが他の行動より不自然に早く書かれてしまう。 */
+/* 重なりで従になった文は、まだ「◯◯の間に」などのホストの文言を付けず
+   {time, kind:"nested", hostId, hostName, overlap, inner} のまま返す。
+   すぐ後で同じホスト・同じ重なりの言葉が連続していたら、composeDiary側で
+   1文にまとめてから、はじめてホストの文言を付ける。 */
+const nestedEntry = (time, host, overlap, inner) => ({ time, kind: "nested", hostId: host.id, hostName: host.name, overlap, inner });
+const plainEntry = (time, text) => ({ time, kind: "plain", text });
+
 export const sentencesFor = (ctx, a) => {
   const { style, viewDay, dayEnd, now, day, dayRecords } = ctx;
 
@@ -120,8 +127,8 @@ export const sentencesFor = (ctx, a) => {
     const out = [];
     const nested = [], plainSegs = [];
     segs.forEach((s) => { const h = hostOf(ctx, s, a); if (h) nested.push({ seg: s, host: h }); else plainSegs.push(s); });
-    if (plainSegs.length) out.push({ time: plainSegs[0].from, text: `${nameChunk(a)}${finalOf(style, a.endWord)}${memoOf(plainSegs)}。` });
-    nested.forEach(({ seg, host }) => out.push({ time: seg.from, text: `${host.name}${a.overlap}${nameChunk(a)}${finalOf(style, a.endWord)}${memoOf([seg])}。` }));
+    if (plainSegs.length) out.push(plainEntry(plainSegs[0].from, `${nameChunk(a)}${finalOf(style, a.endWord)}${memoOf(plainSegs)}。`));
+    nested.forEach(({ seg, host }) => out.push(nestedEntry(seg.from, host, a.overlap, `${nameChunk(a)}${finalOf(style, a.endWord)}${memoOf([seg])}`)));
     return out;
   }
 
@@ -134,9 +141,9 @@ export const sentencesFor = (ctx, a) => {
     segs.forEach((s) => { const h = hostOf(ctx, s, a); if (h) nested.push({ seg: s, host: h }); else plainSegs.push(s); });
     if (plainSegs.length) {
       const ms = plainSegs.reduce((n, x) => n + (x.to - x.from), 0);
-      out.push({ time: plainSegs[0].from, text: `${mergedSentence(style, a, plainSegs)}${a.showTotal === false ? "" : `（合計${dur(ms)}）`}` });
+      out.push(plainEntry(plainSegs[0].from, `${mergedSentence(style, a, plainSegs)}${a.showTotal === false ? "" : `（合計${dur(ms)}）`}`));
     }
-    nested.forEach(({ seg, host }) => out.push({ time: seg.from, text: `${host.name}${a.overlap}${strip(mergedSentence(style, a, [seg]))}。` }));
+    nested.forEach(({ seg, host }) => out.push(nestedEntry(seg.from, host, a.overlap, strip(mergedSentence(style, a, [seg])))));
     return out;
   }
 
@@ -149,7 +156,8 @@ export const sentencesFor = (ctx, a) => {
     const clipped = day.find((x) => x.id === s.id);
     const host = clipped ? hostOf(ctx, clipped, a) : null;
     const body = oneSentence(style, a, s.start, end, hasStart, hasEnd, memoOf([s]));
-    out.push({ time: clipped ? clipped.from : s.start, text: host ? `${host.name}${a.overlap}${strip(body)}。` : body });
+    const time = clipped ? clipped.from : s.start;
+    out.push(host ? nestedEntry(time, host, a.overlap, strip(body)) : plainEntry(time, body));
   });
   return out;
 };
@@ -203,9 +211,24 @@ export const composeDiary = (ctx, activitiesByTime, w) => {
       }
       if (names.length) body.push(`今日は${names.join("、")}${t_(style, "をしました。", "をした。")}`);
     }
+    /* 同じホスト・同じ重なりの言葉の「従」の文が連続していたら、
+       ホストの文言（「◯◯の間に」）を繰り返さず1文にまとめる。
+       例：「朝時間の間に食事をとった、プライベートな時間をとった。」 */
+    const merged = [];
+    for (const t of timed) {
+      const last = merged[merged.length - 1];
+      if (t.kind === "nested" && last?.kind === "nested" && last.hostId === t.hostId && last.overlap === t.overlap) {
+        last.inner += `、${t.inner}`;
+      } else {
+        merged.push({ ...t });
+      }
+    }
     /* 行動名の助詞に「、」を選んだ時、文末の「。」の直前に来ると
        「、。」と詰まってしまうことがあるので、その場合だけ「、」を外す */
-    for (const t of timed) body.push(t.text.replace(/、+(?=。)/g, ""));
+    for (const t of merged) {
+      const text = t.kind === "nested" ? `${t.hostName}${t.overlap}${t.inner}。` : t.text;
+      body.push(text.replace(/、+(?=。)/g, ""));
+    }
     if (style.summary) {
       const sp = day.filter((s) => act(s.activityId)?.inIntro !== false);
       if (sp.length) {
