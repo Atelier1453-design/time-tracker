@@ -12,7 +12,7 @@ import {
 } from "./constants.js";
 import {
   DAY, startOfDay, hhmm, clock, dur, WEEK, dateLabel, fullDateLabel, dateKey,
-  toTimeInput, onDay, previewOf, previewHalf, fillPlaceholders, composeDiary, fmtTime,
+  toTimeInput, onDay, onDate, previewOf, previewHalf, fillPlaceholders, composeDiary, fmtTime,
 } from "./diary.js";
 import { checkStorage, storageBackend, saveData, loadData } from "./storage.js";
 import { geocodeCandidates, fetchWeather } from "./weather.js";
@@ -46,6 +46,7 @@ function App() {
   const [viewDay, setViewDay] = useState(() => startOfDay(Date.now()));
   const [loaded, setLoaded] = useState(false);
   const [panel, setPanel] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(null); // 設定タブ内、開いている小見出し（"diary" | "activities" | "data" | null）
   const [editingActivity, setEditingActivity] = useState(null);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [diary, setDiary] = useState(null);
@@ -73,6 +74,8 @@ function App() {
   const dirty = useRef(false);
   const tapeRef = useRef(null);
   const areaRef = useRef(null);
+  const editSeq = useRef(0); // mutate() のたびに増える。日記が古くなっていないかの判定に使う
+  const diaryGenSeq = useRef(null); // 表示中の日記(diary)を作った/開いた時点の editSeq
 
   useEffect(() => { const id = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(id); }, []);
 
@@ -121,7 +124,7 @@ function App() {
     })();
   }, [activities, sessions, place, weatherLocation, weather, diaries, style, templates, startWords, endWords, overlapWords, loaded]);
 
-  const mutate = (fn) => { dirty.current = true; fn(); };
+  const mutate = (fn) => { dirty.current = true; editSeq.current += 1; fn(); };
 
   /* ── derived ── */
   const todayStart = startOfDay(now);
@@ -218,17 +221,22 @@ function App() {
     mutate(() => setSessions((p) => p.map((s) => (s.id === sid ? { ...s, [field]: onDay(startOfDay(s[field] ?? viewDay), value) } : s))));
   const nudgeDay = (sid, field, delta) =>
     mutate(() => setSessions((p) => p.map((s) => (s.id === sid ? { ...s, [field]: (s[field] ?? Date.now()) + delta * DAY } : s))));
+  const setDate = (sid, field, value) =>
+    mutate(() => setSessions((p) => p.map((s) => (s.id === sid ? { ...s, [field]: onDate(s[field] ?? viewDay, value) } : s))));
   const boundaries = (exceptId) => {
     const m = [];
     for (const o of sessions) { if (o.id === exceptId) continue; m.push(o.start); if (o.end != null) m.push(o.end); }
     return m;
   };
-  /* 「直前に合わせる」がどこへ合わせるべきか */
+  /* 「直前に合わせる」がどこへ合わせるべきか。
+     開始時刻そのものが（誤操作などで）何日もずれている記録があるので、
+     「s.start からDAY以内か」ではなく「表示中の日（viewDay）以降に終わった記録があるか」で判定する。
+     こうすると、開始が壊れている記録でも「直前に合わせる」を押せば当日の0:00まで戻ってこられる。 */
   const anchorFor = (s) => {
     const ends = sessions.filter((o) => o.id !== s.id && o.end != null && o.end <= s.start).map((o) => o.end);
     const best = ends.length ? Math.max(...ends) : null;
     if (best === s.start) return { at: best, aligned: true };
-    if (best == null || best <= s.start - DAY) return { at: startOfDay(s.start), aligned: false, fallback: true };
+    if (best == null || best < viewDay) return { at: viewDay, aligned: false, fallback: true };
     return { at: best, aligned: false };
   };
   const nextBoundary = (s) => { const e = s.end ?? now; const a = boundaries(s.id).filter((tt) => tt > e && tt <= e + 2 * DAY); return a.length ? Math.min(...a) : null; };
@@ -249,6 +257,15 @@ function App() {
     setProbe(viewDay + ratio * DAY);
     setProbeEditing(null);
     setProbeAdd(null);
+  };
+  /* 縦線（probe）を「記録済み⇄未記録」の切り替わり目（区切り）に直接ジャンプさせる。
+     points は marks（viewDay・dayEnd・各記録のfrom/to）を並べたもの＝区切りの一覧。 */
+  const setProbeAt = (t) => { setProbe(t); setProbeEditing(null); setProbeAdd(null); };
+  const jumpProbe = (dir) => {
+    const next = dir > 0
+      ? points.find((p) => p > (probe ?? -Infinity))
+      : [...points].reverse().find((p) => p < (probe ?? Infinity));
+    if (next != null) setProbeAt(next);
   };
   const probeHits = probe == null ? [] : day.filter((s) => s.from <= probe && s.to > probe);
   const probeStart = probe == null ? null : Math.round(probe / 60000) * 60000;
@@ -312,7 +329,7 @@ function App() {
 
   const openDiary = async () => {
     const key = dateKey(viewDay);
-    if (diaries[key] != null) { setDiary(diaries[key]); setSaved(true); return; }
+    if (diaries[key] != null) { setDiary(diaries[key]); setSaved(true); diaryGenSeq.current = editSeq.current; return; }
     await regenerate();
   };
   const regenerate = async () => {
@@ -329,7 +346,11 @@ function App() {
     let text = composeDiary(diaryCtx, byTime, w);
     if (style.weather && !w?.summary) text += "\n\n※天気は取得できませんでした。";
     setDiary(text); setDiaryBusy(false);
+    diaryGenSeq.current = editSeq.current;
   };
+  /* 開いている日記が、元になった記録や設定より古くなっていないか
+     （＝削除・修正した記録や、変更した重なり設定などがまだ反映されていないか） */
+  const diaryStale = diary !== null && diaryGenSeq.current !== null && diaryGenSeq.current !== editSeq.current;
   const insertTemplate = (tpl) => {
     const piece = fillPlaceholders(tpl.text, viewDay, weather[dateKey(viewDay)]);
     const el = areaRef.current;
@@ -473,6 +494,7 @@ function App() {
         <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
           <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>開始</span>
           <input type="time" value=${toTimeInput(s.start)} onInput=${(e) => setTime(s.id, "start", e.target.value)} style=${S.input} />
+          <input type="date" value=${dateKey(s.start)} onInput=${(e) => e.target.value && setDate(s.id, "start", e.target.value)} style=${S.input} />
           <button onClick=${() => nudgeMinutes(s.id, -15)} style=${S.ghost}>−15分</button>
           <button onClick=${() => nudgeMinutes(s.id, -5)} style=${S.ghost}>−5分</button>
           <button onClick=${() => nudgeMinutes(s.id, 5)} style=${S.ghost}>+5分</button>
@@ -514,15 +536,16 @@ function App() {
         <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
           <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>開始</span>
           <input type="time" value=${toTimeInput(s.start)} onInput=${(e) => setTime(s.id, "start", e.target.value)} style=${S.input} />
-          <span style=${{ fontSize: 10, color: MUTED }}>${dateLabel(s.start)}</span>
+          <input type="date" value=${dateKey(s.start)} onInput=${(e) => e.target.value && setDate(s.id, "start", e.target.value)} style=${S.input} />
           <button onClick=${() => nudgeDay(s.id, "start", -1)} style=${S.ghost}>−1日</button>
+          <button onClick=${() => nudgeDay(s.id, "start", 1)} style=${S.ghost}>+1日</button>
           ${!anc.aligned && html`<button onClick=${() => snap(s.id, "start", anc.at)} style=${{ ...S.ghost, color: INK }}>直前に合わせる（${hhmm(anc.at)}）</button>`}
         </div>
         <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           <span style=${{ fontSize: 11, color: MUTED, width: 28 }}>終了</span>
           ${s.end == null ? html`<span style=${{ fontSize: 12, color: MUTED }}>計測中</span>` : html`
             <input type="time" value=${toTimeInput(s.end)} onInput=${(e) => setTime(s.id, "end", e.target.value)} style=${S.input} />
-            <span style=${{ fontSize: 10, color: MUTED }}>${dateLabel(s.end)}</span>
+            <input type="date" value=${dateKey(s.end)} onInput=${(e) => e.target.value && setDate(s.id, "end", e.target.value)} style=${S.input} />
             <button onClick=${() => nudgeDay(s.id, "end", -1)} style=${S.ghost}>−1日</button>
             <button onClick=${() => nudgeDay(s.id, "end", 1)} style=${S.ghost}>+1日</button>
             ${nb != null && html`<button onClick=${() => snap(s.id, "end", nb)} style=${{ ...S.ghost, color: INK }}>直後に合わせる（${hhmm(nb)}）</button>`}
@@ -592,6 +615,10 @@ function App() {
         <div style=${{ display: "flex", justifyContent: "space-between", fontSize: 10, color: MUTED, marginTop: 4, letterSpacing: "0.08em" }}>
           ${[0, 6, 12, 18, 24].map((hh) => html`<span key=${hh}>${hh}</span>`)}
         </div>
+        <div style=${{ display: "flex", gap: 6, marginTop: 6 }}>
+          <button onClick=${() => jumpProbe(-1)} disabled=${!points.some((p) => p < (probe ?? Infinity))} style=${{ ...S.ghost, flex: 1, padding: 7 }}>◀ 前の区切り</button>
+          <button onClick=${() => jumpProbe(1)} disabled=${!points.some((p) => p > (probe ?? -Infinity))} style=${{ ...S.ghost, flex: 1, padding: 7 }}>次の区切り ▶</button>
+        </div>
 
         ${probe != null && html`
           <div style=${{ marginTop: 8, border: `1px solid ${RULE}`, background: CARD, padding: "10px 12px" }}>
@@ -607,8 +634,10 @@ function App() {
                 <div style=${{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
                   <span style=${{ width: 8, height: 18, background: act(s.activityId)?.color, flexShrink: 0 }} />
                   <button onClick=${() => { const next = editing ? null : s.id; setProbeEditing(next); setEndDraft(""); }}
-                    style=${{ fontSize: 13, flex: 1, minWidth: 0, textAlign: "left", background: "transparent", border: "none", color: "inherit", textDecoration: editing ? "underline" : "none", padding: "4px 0" }}>${act(s.activityId)?.name}</button>
-                  <span style=${{ fontSize: 11, color: MUTED }}>${hhmm(s.from)}〜${s.end == null ? "" : hhmm(s.to)}</span>
+                    style=${{ fontSize: 13, flex: 1, minWidth: 0, textAlign: "left", background: "transparent", border: "none", color: "inherit", textDecoration: editing ? "underline" : "none", padding: "4px 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    ${act(s.activityId)?.name}${s.memo && html`<span style=${{ color: MUTED }}>　（${s.memo}）</span>`}
+                  </button>
+                  <span style=${{ fontSize: 11, color: MUTED, flexShrink: 0 }}>${hhmm(s.from)}〜${s.end == null ? "" : hhmm(s.to)}</span>
                   <span style=${{ fontSize: 13, fontVariantNumeric: "tabular-nums", minWidth: 62, textAlign: "right" }}>${dur(probe - s.from)}</span>
                 </div>
                 ${editing && html`
@@ -702,6 +731,11 @@ function App() {
 
       ${diary !== null && html`
         <div style=${S.card}>
+          ${diaryStale && html`
+            <div style=${{ border: `1px solid ${ALERT}`, background: "rgba(176,58,46,.06)", color: INK, fontSize: 12, lineHeight: 1.7, padding: "8px 10px", marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span>この日の記録や設定があとから変わっています。下の内容は古いままかもしれません。</span>
+              <button onClick=${regenerate} style=${{ padding: "6px 10px", background: ALERT, color: PAPER, border: "none", fontSize: 12, flexShrink: 0 }}>作り直す</button>
+            </div>`}
           <div style=${{ ...S.label, display: "flex", justifyContent: "space-between" }}>
             <span>日記</span>${saved && html`<span style=${{ color: MUTED }}>保存済み</span>`}
           </div>
@@ -753,9 +787,13 @@ function App() {
         </div>`}
 
       ${panel === "settings" && html`
-        <div style=${{ ...S.card, marginTop: 14 }}>
-          <div style=${{ ...S.sectionTitle, marginBottom: 16 }}>日記全体の書き方</div>
-
+        <div style=${{ ...S.card, marginTop: 14, padding: "4px 14px 8px" }}>
+          <button onClick=${() => setSettingsOpen(settingsOpen === "diary" ? null : "diary")} aria-expanded=${settingsOpen === "diary"}
+            style=${{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 0", background: "transparent", border: "none", borderBottom: `${settingsOpen === "diary" ? 2 : 1}px solid ${settingsOpen === "diary" ? INK : RULE}`, fontSize: 13, letterSpacing: "0.1em", color: INK, cursor: "pointer" }}>
+            <span>日記全体の書き方</span><span style=${{ fontSize: 11, color: MUTED }}>${settingsOpen === "diary" ? "▲" : "▼"}</span>
+          </button>
+          ${settingsOpen === "diary" && html`
+          <div style=${{ paddingTop: 16 }}>
           <div style=${S.label}>文体</div>
           <div style=${{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 20 }}>
             <button onClick=${() => mutate(() => setStyle((x) => ({ ...x, tone: "polite" })))} style=${pill(style.tone === "polite")}>〜ました</button>
@@ -827,8 +865,14 @@ function App() {
                 ${weatherLocation ? html`天気の取得地点：<b>${weatherLocation.label}</b>` : "天気の場所が未設定です。検索して選んでください。"}
               </div>
             </div>`}
+          </div>`}
 
-          <div style=${{ ...S.sectionTitle, margin: "32px 0 16px" }}>行動ボタン</div>
+          <button onClick=${() => setSettingsOpen(settingsOpen === "activities" ? null : "activities")} aria-expanded=${settingsOpen === "activities"}
+            style=${{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 0", marginTop: 4, background: "transparent", border: "none", borderBottom: `${settingsOpen === "activities" ? 2 : 1}px solid ${settingsOpen === "activities" ? INK : RULE}`, fontSize: 13, letterSpacing: "0.1em", color: INK, cursor: "pointer" }}>
+            <span>行動ボタン</span><span style=${{ fontSize: 11, color: MUTED }}>${settingsOpen === "activities" ? "▲" : "▼"}</span>
+          </button>
+          ${settingsOpen === "activities" && html`
+          <div style=${{ paddingTop: 16 }}>
           <div style=${{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             ${activities.map((a) => {
               const open = editingActivity === a.id;
@@ -840,8 +884,12 @@ function App() {
           ${ea && html`
             <div style=${{ marginTop: 16, borderTop: `1px solid ${RULE}`, paddingTop: 14 }}>
               <input value=${ea.name} onInput=${(e) => patchActivity(ea.id, { name: e.target.value })} style=${{ ...S.input, width: "100%", fontSize: 15, padding: 9 }} />
-              <div style=${{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+              <div style=${{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
                 ${SWATCHES.map((c) => html`<button key=${c} onClick=${() => patchActivity(ea.id, { color: c })} aria-label=${`色を変更 ${c}`} style=${{ width: 28, height: 28, background: c, border: ea.color === c ? `2px solid ${INK}` : "1px solid rgba(0,0,0,.1)" }} />`)}
+                <label style=${{ width: 28, height: 28, position: "relative", border: `1px dashed ${MUTED}`, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }} aria-label="色を自由に選ぶ" title="色を自由に選ぶ">
+                  <span style=${{ fontSize: 14, color: MUTED, pointerEvents: "none" }}>＋</span>
+                  <input type="color" value=${ea.color} onInput=${(e) => patchActivity(ea.id, { color: e.target.value })} style=${{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, border: "none", padding: 0, cursor: "pointer" }} />
+                </label>
               </div>
 
               <div style=${{ ...S.label, marginTop: 18 }}>日記での書き方</div>
@@ -984,8 +1032,14 @@ function App() {
                 <button onClick=${() => removeActivity(ea.id)} style=${{ ...S.ghost, color: ALERT, borderColor: ALERT, padding: 9, fontSize: 12 }}>この行動を削除</button>
               </div>
             </div>`}
+          </div>`}
 
-          <div style=${{ ...S.sectionTitle, margin: "32px 0 16px" }}>保存とデータ</div>
+          <button onClick=${() => setSettingsOpen(settingsOpen === "data" ? null : "data")} aria-expanded=${settingsOpen === "data"}
+            style=${{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 0", marginTop: 4, background: "transparent", border: "none", borderBottom: `${settingsOpen === "data" ? 2 : 1}px solid ${settingsOpen === "data" ? INK : RULE}`, fontSize: 13, letterSpacing: "0.1em", color: INK, cursor: "pointer" }}>
+            <span>保存とデータ</span><span style=${{ fontSize: 11, color: MUTED }}>${settingsOpen === "data" ? "▲" : "▼"}</span>
+          </button>
+          ${settingsOpen === "data" && html`
+          <div style=${{ paddingTop: 16 }}>
           <div style=${S.label}>保存の状態</div>
           <div style=${{ fontSize: 12, color: storageOK === false ? ALERT : INK, lineHeight: 1.7, border: `1px solid ${RULE}`, padding: "10px 12px", background: PAPER }}>
             ${storageOK === false
@@ -1022,6 +1076,7 @@ function App() {
             <button onClick=${replaceAll} disabled=${!importText.trim()} style=${{ ...S.ghost, color: importText.trim() ? ALERT : MUTED, borderColor: importText.trim() ? ALERT : RULE, padding: "9px 12px", fontSize: 12 }}>すべて置き換える</button>
           </div>
           ${importMsg && html`<div style=${{ fontSize: 11, color: MUTED, marginTop: 8 }}>${importMsg}</div>`}
+          </div>`}
         </div>`}
     </div>`;
 }
