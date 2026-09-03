@@ -35,23 +35,25 @@ export const START_PRESETS = [
   { join: "入って", plain: "入った", polite: "入りました" },
 ];
 
-/* 終了の言葉：言い切る形だけ。文全体の締めにも使う */
+/* 終了の言葉：言い切る形だけ。文全体の締めにも使う。
+   link は「次の文につなげる」ときに使う連用形／て形（例：過ごした→過ごし）。
+   単純に「た」を取るだけでは作れない言葉があるので（例：戻った→戻り）、あらかじめ用意しておく。 */
 export const END_PRESETS = [
   { label: "（言葉なし）", plain: "", polite: "" },
-  { plain: "した", polite: "しました" },
-  { plain: "とった", polite: "とりました" },
-  { plain: "終わらせた", polite: "終わらせました" },
-  { plain: "済ませた", polite: "済ませました" },
-  { plain: "していた", polite: "していました" },
-  { plain: "過ごした", polite: "過ごしました" },
-  { plain: "だった", polite: "でした" },
-  { plain: "終えた", polite: "終えました" },
-  { plain: "到着した", polite: "到着しました" },
-  { plain: "着いた", polite: "着きました" },
-  { plain: "起きた", polite: "起きました" },
-  { plain: "帰宅した", polite: "帰宅しました" },
-  { plain: "戻った", polite: "戻りました" },
-  { plain: "出た", polite: "出ました" },
+  { plain: "した", polite: "しました", link: "し" },
+  { plain: "とった", polite: "とりました", link: "とり" },
+  { plain: "終わらせた", polite: "終わらせました", link: "終わらせ" },
+  { plain: "済ませた", polite: "済ませました", link: "済ませ" },
+  { plain: "していた", polite: "していました", link: "していて" },
+  { plain: "過ごした", polite: "過ごしました", link: "過ごし" },
+  { plain: "だった", polite: "でした", link: "で" },
+  { plain: "終えた", polite: "終えました", link: "終え" },
+  { plain: "到着した", polite: "到着しました", link: "到着し" },
+  { plain: "着いた", polite: "着きました", link: "着き" },
+  { plain: "起きた", polite: "起きました", link: "起き" },
+  { plain: "帰宅した", polite: "帰宅しました", link: "帰宅し" },
+  { plain: "戻った", polite: "戻りました", link: "戻り" },
+  { plain: "出た", polite: "出ました", link: "出" },
 ];
 
 export const wordKey = (w) => w.label || w.join || w.plain || "none";
@@ -145,6 +147,14 @@ export function normalize(a, globalOverlap) {
   if (n.np === undefined) n.np = "を";
   delete n.detail; delete n.sleep; delete n.particle;
   delete n.verbPlain; delete n.verbPolite; delete n.order; delete n.showName; delete n.timeFirst;
+
+  /* 「つなげる形」はあとから追加した項目なので、以前保存されたデータの
+     終了の言葉には付いていない。用意されている言葉と同じ言い切り形なら、
+     つなげる形を補っておく（すでに何か入っていればそのまま）。 */
+  if (n.endWord && !n.endWord.link) {
+    const preset = END_PRESETS.find((w) => w.plain === n.endWord.plain);
+    if (preset?.link) n.endWord = { ...n.endWord, link: preset.link };
+  }
   return n;
 }
 

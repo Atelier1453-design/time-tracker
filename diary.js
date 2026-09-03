@@ -44,6 +44,10 @@ export const fmtTime = (style, ms) => {
 /* 「」（空文字）は「（言葉なし）」を選んだという正規の値。
    フォールバックするのは値が未設定（null/undefined）のときだけ。 */
 export const finalOf = (style, w) => (style.tone === "polite" ? w?.polite ?? w?.plain ?? "" : w?.plain ?? "");
+/* 文末の形。linked（次の文につなげる）が立っていて、かつ「つなげる形」が
+   その言葉に用意されていれば、それ＋「、」。それ以外は通常どおり言い切り＋「。」。 */
+export const endingOf = (style, w, linked) =>
+  linked && w?.link ? { word: w.link, punct: "、" } : { word: finalOf(style, w), punct: "。" };
 export const nameChunk = (a) => `${a.name}${a.np ?? "を"}`;
 const strip = (x) => x.replace(/。$/, "");
 export const memoOf = (segs) => {
@@ -51,47 +55,49 @@ export const memoOf = (segs) => {
   return notes.length ? `（${[...new Set(notes)].join("、")}）` : "";
 };
 
-/* 1つの記録から1文：名前 / 開始時刻+助詞+言葉 / 終了時刻+助詞+言葉 */
-export const oneSentence = (style, a, st, en, hasStart, hasEnd, memo = "") => {
+/* 1つの記録から1文：名前 / 開始時刻+助詞+言葉 / 終了時刻+助詞+言葉
+   linked … 次の文につなげるかどうか（trueなら終了の言葉を「つなげる形」＋「、」にする） */
+export const oneSentence = (style, a, st, en, hasStart, hasEnd, memo = "", linked = false) => {
   const fmt = (ms) => fmtTime(style, ms);
   const sw = a.startWord || {}, ew = a.endWord || {};
   const sp = a.sp ?? "に", ep = a.ep ?? "に";
   const pos = a.namePos ?? "head";
   const N = pos === "none" ? "" : nameChunk(a);
-  const sFin = finalOf(style, sw), eFin = finalOf(style, ew);
+  const sFin = finalOf(style, sw);
+  const { word: eFin, punct } = endingOf(style, ew, linked);
 
   if (hasStart && hasEnd) {
     const S = `${fmt(st)}${sp}`;
     const E = `${fmt(en)}${ep}`;
     const J = sw.join ? `${sw.join}、` : "";
-    if (pos === "mid") return `${S}${N}${J}${E}${eFin}${memo}。`;
-    if (pos === "tail") return `${S}${J}${E}${N}${eFin}${memo}。`;
-    return `${N}${S}${J}${E}${eFin}${memo}。`;
+    if (pos === "mid") return `${S}${N}${J}${E}${eFin}${memo}${punct}`;
+    if (pos === "tail") return `${S}${J}${E}${N}${eFin}${memo}${punct}`;
+    return `${N}${S}${J}${E}${eFin}${memo}${punct}`;
   }
   if (hasStart) {
     const w = sFin || eFin;
-    if (pos === "head") return `${N}${fmt(st)}${sp}${w}${memo}。`;
-    return `${fmt(st)}${sp}${N}${w}${memo}。`;
+    if (pos === "head") return `${N}${fmt(st)}${sp}${w}${memo}${punct}`;
+    return `${fmt(st)}${sp}${N}${w}${memo}${punct}`;
   }
-  if (pos === "head") return `${N}${fmt(en)}${ep}${eFin}${memo}。`;
-  return `${fmt(en)}${ep}${N}${eFin}${memo}。`;
+  if (pos === "head") return `${N}${fmt(en)}${ep}${eFin}${memo}${punct}`;
+  return `${fmt(en)}${ep}${N}${eFin}${memo}${punct}`;
 };
 
 /* 同じ行動の複数区間を1文にまとめる */
-export const mergedSentence = (style, a, segs) => {
+export const mergedSentence = (style, a, segs, linked = false) => {
   const fmt = (ms) => fmtTime(style, ms);
   const sp = a.sp ?? "から", ep = a.ep ?? "まで";
   const pos = a.namePos ?? "head";
   const N = pos === "none" ? "" : nameChunk(a);
-  const eFin = finalOf(style, a.endWord);
+  const { word: eFin, punct } = endingOf(style, a.endWord, linked);
   /* 文中は、最初の時刻のすぐあとに行動名を置く */
   const spans = segs
     .map((x, i) => `${fmt(x.from)}${sp}${pos === "mid" && i === 0 ? N : ""}${fmt(x.to)}${ep}`)
     .join("、");
   const memo = memoOf(segs);
-  if (pos === "head") return `${N}${spans}${eFin}${memo}。`;
-  if (pos === "mid") return `${spans}${eFin}${memo}。`;
-  return `${spans}${N}${eFin}${memo}。`;
+  if (pos === "head") return `${N}${spans}${eFin}${memo}${punct}`;
+  if (pos === "mid") return `${spans}${eFin}${memo}${punct}`;
+  return `${spans}${N}${eFin}${memo}${punct}`;
 };
 
 /* この区間が「重なり」の相手を持つか。持つなら、先に始まっていた方（＝主）を返す。 */
@@ -114,7 +120,8 @@ const valid = (s) => s.end == null || s.end > s.start;
    すぐ後で同じホスト・同じ重なりの言葉が連続していたら、composeDiary側で
    1文にまとめてから、はじめてホストの文言を付ける。 */
 const nestedEntry = (time, host, overlap, inner) => ({ time, kind: "nested", hostId: host.id, hostName: host.name, overlap, inner });
-const plainEntry = (time, text) => ({ time, kind: "plain", text });
+/* linked … このplainの文が次の文につながっているか（composeDiary側で改行せずくっつける） */
+const plainEntry = (time, text, linked) => ({ time, kind: "plain", text, linked: !!linked });
 
 export const sentencesFor = (ctx, a) => {
   const { style, viewDay, dayEnd, now, day, dayRecords } = ctx;
@@ -127,7 +134,12 @@ export const sentencesFor = (ctx, a) => {
     const out = [];
     const nested = [], plainSegs = [];
     segs.forEach((s) => { const h = hostOf(ctx, s, a); if (h) nested.push({ seg: s, host: h }); else plainSegs.push(s); });
-    if (plainSegs.length) out.push(plainEntry(plainSegs[0].from, `${nameChunk(a)}${finalOf(style, a.endWord)}${memoOf(plainSegs)}。`));
+    if (plainSegs.length) {
+      /* 複数の区間を1文にまとめる場合、「つなげる」かどうかは一番最後の区間のもの（＝文末に来る）で決める */
+      const last = plainSegs[plainSegs.length - 1];
+      const { word: eFin, punct } = endingOf(style, a.endWord, !!last.linked);
+      out.push(plainEntry(plainSegs[0].from, `${nameChunk(a)}${eFin}${memoOf(plainSegs)}${punct}`, last.linked));
+    }
     nested.forEach(({ seg, host }) => out.push(nestedEntry(seg.from, host, a.overlap, `${nameChunk(a)}${finalOf(style, a.endWord)}${memoOf([seg])}`)));
     return out;
   }
@@ -141,7 +153,8 @@ export const sentencesFor = (ctx, a) => {
     segs.forEach((s) => { const h = hostOf(ctx, s, a); if (h) nested.push({ seg: s, host: h }); else plainSegs.push(s); });
     if (plainSegs.length) {
       const ms = plainSegs.reduce((n, x) => n + (x.to - x.from), 0);
-      out.push(plainEntry(plainSegs[0].from, `${mergedSentence(style, a, plainSegs)}${a.showTotal === false ? "" : `（合計${dur(ms)}）`}`));
+      const last = plainSegs[plainSegs.length - 1];
+      out.push(plainEntry(plainSegs[0].from, `${mergedSentence(style, a, plainSegs, !!last.linked)}${a.showTotal === false ? "" : `（合計${dur(ms)}）`}`, last.linked));
     }
     nested.forEach(({ seg, host }) => out.push(nestedEntry(seg.from, host, a.overlap, strip(mergedSentence(style, a, [seg])))));
     return out;
@@ -155,9 +168,9 @@ export const sentencesFor = (ctx, a) => {
     if (!hasStart && !hasEnd) return;
     const clipped = day.find((x) => x.id === s.id);
     const host = clipped ? hostOf(ctx, clipped, a) : null;
-    const body = oneSentence(style, a, s.start, end, hasStart, hasEnd, memoOf([s]));
+    const body = oneSentence(style, a, s.start, end, hasStart, hasEnd, memoOf([s]), !!s.linked);
     const time = clipped ? clipped.from : s.start;
-    out.push(host ? nestedEntry(time, host, a.overlap, strip(body)) : plainEntry(time, body));
+    out.push(host ? nestedEntry(time, host, a.overlap, strip(body)) : plainEntry(time, body, s.linked));
   });
   return out;
 };
@@ -224,10 +237,15 @@ export const composeDiary = (ctx, activitiesByTime, w) => {
       }
     }
     /* 行動名の助詞に「、」を選んだ時、文末の「。」の直前に来ると
-       「、。」と詰まってしまうことがあるので、その場合だけ「、」を外す */
+       「、。」と詰まってしまうことがあるので、その場合だけ「、」を外す。
+       linked（次の文につなげる）が立っている文は、改行せず次の文の頭にそのままくっつける。 */
+    let carryLinked = false;
     for (const t of merged) {
       const text = t.kind === "nested" ? `${t.hostName}${t.overlap}${t.inner}。` : t.text;
-      body.push(text.replace(/、+(?=。)/g, ""));
+      const cleaned = text.replace(/、+(?=。)/g, "");
+      if (carryLinked && body.length) body[body.length - 1] += cleaned;
+      else body.push(cleaned);
+      carryLinked = t.kind === "plain" && !!t.linked;
     }
     if (style.summary) {
       const sp = day.filter((s) => act(s.activityId)?.inIntro !== false);

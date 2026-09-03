@@ -28,6 +28,14 @@ const IconStop = () => html`
     <rect x="5.5" y="3" width="9" height="10" fill="currentColor" />
   </svg>`;
 
+/* 保存データの「終了の言葉」に、あとから追加した「つなげる形」が無ければ
+   用意されている言葉から補う（normalize()の行動ごとの補完と同じ考え方）。 */
+const backfillEndWordLinks = (words) => words.map((w) => {
+  if (w.link) return w;
+  const preset = END_PRESETS.find((p) => p.plain === w.plain);
+  return preset?.link ? { ...w, link: preset.link } : w;
+});
+
 /* ── app ──────────────────────────────────────────────────── */
 function App() {
   const [activities, setActivities] = useState(DEFAULT_ACTIVITIES);
@@ -102,7 +110,7 @@ function App() {
             if (d.style) setStyle({ ...DEFAULT_STYLE, ...d.style });
             if (d.templates) setTemplates(d.templates);
             if (d.startWords?.length) setStartWords(d.startWords);
-            if (d.endWords?.length) setEndWords(d.endWords);
+            if (d.endWords?.length) setEndWords(backfillEndWordLinks(d.endWords));
             if (d.particles?.length) setParticles(d.particles);
             const baseOverlapWords = d.overlapWords?.length ? d.overlapWords : OVERLAP_WORDS;
             setOverlapWords(migratedOverlap && !baseOverlapWords.includes(migratedOverlap) ? [...baseOverlapWords, migratedOverlap] : baseOverlapWords);
@@ -246,6 +254,7 @@ function App() {
   const fixEnd = (sid) => mutate(() => setSessions((p) => p.map((s) => (s.id === sid && s.end != null ? { ...s, end: s.end + DAY } : s))));
   const removeSession = (id) => mutate(() => setSessions((p) => p.filter((s) => s.id !== id)));
   const setMemo = (sid, memo) => mutate(() => setSessions((p) => p.map((s) => (s.id === sid ? { ...s, memo } : s))));
+  const setLinked = (sid, linked) => mutate(() => setSessions((p) => p.map((s) => (s.id === sid ? { ...s, linked } : s))));
   /* 計測中の記録の開始をその場で微調整 */
   const nudgeMinutes = (sid, mins) =>
     mutate(() => setSessions((p) => p.map((s) => (s.id === sid ? { ...s, start: Math.min(Date.now() - 1000, s.start + mins * 60000) } : s))));
@@ -299,7 +308,7 @@ function App() {
   };
   const addWord = () => {
     if (!newWord) return;
-    const { kind, join, plain, polite } = newWord;
+    const { kind, join, plain, polite, link } = newWord;
     if (kind === "overlap" || kind === "particle") {
       const w = join.trim();
       const list = kind === "overlap" ? overlapWords : particles;
@@ -311,7 +320,7 @@ function App() {
     if (kind === "start" ? !join.trim() : !plain.trim()) return;
     const w = kind === "start"
       ? { join: join.trim(), plain: plain.trim() || join.trim(), polite: polite.trim() || plain.trim(), custom: true }
-      : { plain: plain.trim(), polite: polite.trim() || plain.trim(), custom: true };
+      : { plain: plain.trim(), polite: polite.trim() || plain.trim(), ...(link?.trim() ? { link: link.trim() } : {}), custom: true };
     mutate(() => (kind === "start" ? setStartWords((p) => [...p, w]) : setEndWords((p) => [...p, w])));
     if (ea) patchActivity(ea.id, kind === "start" ? { startWord: w } : { endWord: w });
     setNewWord(null);
@@ -355,12 +364,32 @@ function App() {
   /* 開いている日記が、元になった記録や設定より古くなっていないか
      （＝削除・修正した記録や、変更した重なり設定などがまだ反映されていないか） */
   const diaryStale = diary !== null && diaryGenSeq.current !== null && diaryGenSeq.current !== editSeq.current;
-  const insertTemplate = (tpl) => {
-    const piece = fillPlaceholders(tpl.text, viewDay, weather[dateKey(viewDay)]);
+  const insertAtCursor = (piece) => {
     const el = areaRef.current;
     const pos = el && typeof el.selectionStart === "number" ? el.selectionStart : diary.length;
     setDiary(diary.slice(0, pos) + (pos > 0 && diary[pos - 1] !== "\n" ? "\n" : "") + piece + diary.slice(pos));
     setSaved(false);
+  };
+  const insertTemplate = (tpl) => insertAtCursor(fillPlaceholders(tpl.text, viewDay, weather[dateKey(viewDay)]));
+  /* 「はじめの一文」「まとめの一文」「天気」は、自動で入る場所（先頭・末尾）とは別に、
+     カーソルの位置へも手動で差し込めるようにしたもの。composeDiary の同名ロジックと
+     見た目を合わせているが、こちらは「その場に１つだけ挿す」ための簡易版。 */
+  const introText = () => {
+    const names = byTime.filter((a) => a.diary !== "off" && a.inIntro !== false).map((a) => a.name);
+    if (!names.length) return null;
+    return `今日は${names.join("、")}${style.tone === "polite" ? "をしました。" : "をした。"}`;
+  };
+  const summaryText = () => {
+    const sp = day.filter((s) => act(s.activityId)?.inIntro !== false);
+    if (!sp.length) return null;
+    const first = sp[0], last = sp[sp.length - 1];
+    return `一日は${fmtTime(style, first.from)}の「${act(first.activityId)?.name}」から始まり、${fmtTime(style, last.to)}の「${act(last.activityId)?.name}」まで${style.tone === "polite" ? "記録しました。" : "記録した。"}`;
+  };
+  const weatherText = () => {
+    const w = weather[dateKey(viewDay)];
+    if (!w?.summary) return null;
+    const temps = w.high != null && w.low != null ? `　最高${w.high}度・最低${w.low}度` : "";
+    return `${place}　${w.summary}${temps}`;
   };
   const saveDiary = () => { mutate(() => setDiaries((p) => ({ ...p, [dateKey(viewDay)]: diary }))); setSaved(true); };
   const copyDiary = async () => {
@@ -442,7 +471,7 @@ function App() {
         if (d.style) setStyle({ ...DEFAULT_STYLE, ...d.style });
         if (d.templates) setTemplates(d.templates);
         if (d.startWords?.length) setStartWords(d.startWords);
-        if (d.endWords?.length) setEndWords(d.endWords);
+        if (d.endWords?.length) setEndWords(backfillEndWordLinks(d.endWords));
         if (d.particles?.length) setParticles(d.particles);
         const baseOverlapWords = d.overlapWords?.length ? d.overlapWords : overlapWords;
         if (migratedOverlap && !baseOverlapWords.includes(migratedOverlap)) setOverlapWords([...baseOverlapWords, migratedOverlap]);
@@ -536,6 +565,7 @@ function App() {
   /* 終わった記録をその場で直す欄（カラーバーの詳細から使う） */
   const renderCompletedFields = (s) => {
     const anc = anchorFor(s), nb = nextBoundary(s), broken = !valid(s);
+    const linkWord = act(s.activityId)?.endWord?.link;
     return html`
       <div>
         <div style=${{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
@@ -562,11 +592,56 @@ function App() {
           placeholder="メモ"
           style=${{ ...S.input, width: "100%", padding: 7, marginTop: 8, fontFamily: "'Hiragino Sans','Yu Gothic',system-ui,sans-serif" }}
         />
+        ${linkWord
+          ? html`<button onClick=${() => setLinked(s.id, !s.linked)} style=${{ ...pill(!!s.linked), width: "100%", marginTop: 8 }}>次の文につなげる（${linkWord}、）</button>`
+          : html`<div style=${{ fontSize: 10, color: MUTED, marginTop: 8, lineHeight: 1.6 }}>この行動の終了の言葉には「つなげる形」が未設定です。設定→行動ボタンの「終了」から追加できます。</div>`}
         ${broken && html`
           <div style=${{ fontSize: 11, color: ALERT, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
             終了が開始より前です。
             <button onClick=${() => fixEnd(s.id)} style=${{ ...S.ghost, color: ALERT, borderColor: ALERT }}>翌日の終了にする</button>
           </div>`}
+        ${s.end != null && html`<button onClick=${() => snap(s.id, "end", null)} style=${{ ...S.ghost, width: "100%", padding: 8, marginTop: 8, color: INK }}>計測中にする（終了を取り消す）</button>`}
+      </div>`;
+  };
+
+  /* 「＋追加」の新しい言葉フォーム。それぞれの言葉一覧のすぐ下に出したいので、
+     呼び出し側で kind を指定して該当箇所に差し込む（共通の1箇所にまとめて出すと、
+     どの一覧に追加したのか分かりにくく紛らわしいため）。 */
+  const renderNewWordForm = (kind) => {
+    if (!newWord || newWord.kind !== kind) return null;
+    return html`
+      <div style=${{ marginTop: 8, padding: 12, background: PAPER, border: `1px solid ${INK}` }}>
+        <div style=${{ fontSize: 11, color: MUTED, marginBottom: 8 }}>
+          ${kind === "start" ? "開始の言葉を作る" : kind === "end" ? "終了の言葉を作る" : kind === "particle" ? "助詞を作る" : "重なったときのつなぎ言葉を作る"}（ほかの行動でも選べるようになります）
+        </div>
+        <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          ${kind === "overlap" && html`
+            <label style=${{ fontSize: 10, color: MUTED }}>つなぎ言葉
+              <input value=${newWord.join} onInput=${(e) => setNewWord({ ...newWord, join: e.target.value })} placeholder="の合間に" style=${{ ...S.input, display: "block", width: 140, marginTop: 3 }} /></label>
+          `}
+          ${kind === "particle" && html`
+            <label style=${{ fontSize: 10, color: MUTED }}>助詞
+              <input value=${newWord.join} onInput=${(e) => setNewWord({ ...newWord, join: e.target.value })} placeholder="へ" style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
+          `}
+          ${kind === "start" && html`
+            <label style=${{ fontSize: 10, color: MUTED }}>つなぐ形
+              <input value=${newWord.join} onInput=${(e) => setNewWord({ ...newWord, join: e.target.value })} placeholder="出かけて" style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
+          `}
+          ${kind !== "overlap" && kind !== "particle" && html`
+            <label style=${{ fontSize: 10, color: MUTED }}>〜た形
+              <input value=${newWord.plain} onInput=${(e) => setNewWord({ ...newWord, plain: e.target.value })} placeholder="出かけた" style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
+            <label style=${{ fontSize: 10, color: MUTED }}>〜ました形
+              <input value=${newWord.polite} onInput=${(e) => setNewWord({ ...newWord, polite: e.target.value })} placeholder="出かけました" style=${{ ...S.input, display: "block", width: 110, marginTop: 3 }} /></label>
+          `}
+          ${kind === "end" && html`
+            <label style=${{ fontSize: 10, color: MUTED }}>つなげる形（次の文につなげるとき。例：過ごし）
+              <input value=${newWord.link || ""} onInput=${(e) => setNewWord({ ...newWord, link: e.target.value })} placeholder="過ごし" style=${{ ...S.input, display: "block", width: 140, marginTop: 3 }} /></label>
+          `}
+        </div>
+        <div style=${{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button onClick=${addWord} style=${{ flex: 1, padding: 9, background: INK, color: PAPER, border: "none", fontSize: 12 }}>追加してこの行動に使う</button>
+          <button onClick=${() => setNewWord(null)} style=${{ ...S.ghost, padding: 9, fontSize: 12 }}>やめる</button>
+        </div>
       </div>`;
   };
 
@@ -576,6 +651,10 @@ function App() {
   const hasSaved = diaries[dateKey(viewDay)] != null;
   const ea = editingActivity ? act(editingActivity) : null;
   const et = editingTemplate ? templates.find((x) => x.id === editingTemplate) : null;
+  const introPiece = diary !== null ? introText() : null;
+  const summaryPiece = diary !== null ? summaryText() : null;
+  const weatherPiece = diary !== null ? weatherText() : null;
+  const insertableTemplates = templates.filter((x) => x.text.trim());
 
   return html`
     <div style=${S.shell}>
@@ -746,12 +825,18 @@ function App() {
           </div>
           <textarea ref=${areaRef} value=${diary} onInput=${(e) => { setDiary(e.target.value); setSaved(false); }} rows=${Math.min(20, diary.split("\n").length + 3)}
             style=${{ width: "100%", border: `1px solid ${RULE}`, background: PAPER, color: INK, padding: 10, fontSize: 14, lineHeight: 1.8, fontFamily: "'Hiragino Sans','Yu Gothic',system-ui,sans-serif", resize: "vertical" }} />
-          ${templates.filter((x) => x.text.trim()).length > 0 && html`
+          ${(introPiece || summaryPiece || weatherPiece || insertableTemplates.length > 0) && html`
             <div style=${{ marginTop: 8 }}>
               <div style=${{ fontSize: 10, color: MUTED, marginBottom: 5 }}>カーソルの位置に差し込む</div>
               <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                ${templates.filter((x) => x.text.trim()).map((x) => html`
-                  <button key=${x.id} onClick=${() => insertTemplate(x)} style=${{ ...S.ghost, color: INK }}>＋${x.label}</button>`)}
+                ${introPiece && html`<button onClick=${() => insertAtCursor(introPiece)} style=${{ ...S.ghost, color: INK }}>＋はじめの一文</button>`}
+                ${summaryPiece && html`<button onClick=${() => insertAtCursor(summaryPiece)} style=${{ ...S.ghost, color: INK }}>＋まとめの一文</button>`}
+                ${weatherPiece && html`<button onClick=${() => insertAtCursor(weatherPiece)} style=${{ ...S.ghost, color: INK }}>＋天気</button>`}
+                ${insertableTemplates.map((x) => html`
+                  <span key=${x.id} style=${{ display: "inline-flex" }}>
+                    <button onClick=${() => insertTemplate(x)} style=${{ ...S.ghost, color: INK }}>＋${x.label}</button>
+                    <button onClick=${() => removeTemplate(x.id)} aria-label=${`「${x.label}」を削除`} style=${{ ...S.ghost, borderLeft: "none", padding: "5px 6px" }}>×</button>
+                  </span>`)}
               </div>
             </div>`}
           <div style=${{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
@@ -941,6 +1026,7 @@ function App() {
                       </span>`)}
                     <button onClick=${() => setNewWord({ kind: "particle", join: "", plain: "", polite: "" })} style=${{ ...S.ghost, padding: "7px 10px", borderStyle: "dashed" }}>＋追加</button>
                   </div>
+                  ${renderNewWordForm("particle")}
                 `}
 
                 <div style=${{ ...S.label, marginTop: 20 }}>開始</div>
@@ -958,6 +1044,7 @@ function App() {
                       </span>`)}
                     <button onClick=${() => setNewWord({ kind: "start", join: "", plain: "", polite: "" })} style=${{ ...S.ghost, padding: "7px 10px", borderStyle: "dashed" }}>＋追加</button>
                   </div>
+                  ${renderNewWordForm("start")}
                 `}
 
                 <div style=${{ ...S.label, marginTop: 20 }}>終了</div>
@@ -970,8 +1057,9 @@ function App() {
                       <button onClick=${() => patchActivity(ea.id, { endWord: w })} style=${pill((ea.endWord?.plain ?? "") === w.plain)}>${w.label || w.plain}</button>
                       ${w.custom && html`<button onClick=${() => removeWord("end", w)} aria-label="この言葉を削除" style=${{ ...S.ghost, borderLeft: "none", padding: "7px 6px" }}>×</button>`}
                     </span>`)}
-                  <button onClick=${() => setNewWord({ kind: "end", join: "", plain: "", polite: "" })} style=${{ ...S.ghost, padding: "7px 10px", borderStyle: "dashed" }}>＋追加</button>
+                  <button onClick=${() => setNewWord({ kind: "end", join: "", plain: "", polite: "", link: "" })} style=${{ ...S.ghost, padding: "7px 10px", borderStyle: "dashed" }}>＋追加</button>
                 </div>
+                ${renderNewWordForm("end")}
 
                 ${ea.merge !== false && html`
                   <button onClick=${() => patchActivity(ea.id, { showTotal: ea.showTotal === false })} style=${{ ...pill(ea.showTotal !== false), marginTop: 16 }}>合計を出す</button>
@@ -988,6 +1076,7 @@ function App() {
                     </span>`)}
                   <button onClick=${() => setNewWord({ kind: "particle", join: "", plain: "", polite: "" })} style=${{ ...S.ghost, padding: "7px 10px", borderStyle: "dashed" }}>＋追加</button>
                 </div>
+                ${renderNewWordForm("particle")}
                 <div style=${S.label}>使う言葉</div>
                 <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   ${endWords.map((w) => html`
@@ -995,40 +1084,10 @@ function App() {
                       <button onClick=${() => patchActivity(ea.id, { endWord: w })} style=${pill((ea.endWord?.plain ?? "") === w.plain)}>${w.label || w.plain}</button>
                       ${w.custom && html`<button onClick=${() => removeWord("end", w)} aria-label="この言葉を削除" style=${{ ...S.ghost, borderLeft: "none", padding: "7px 6px" }}>×</button>`}
                     </span>`)}
-                  <button onClick=${() => setNewWord({ kind: "end", join: "", plain: "", polite: "" })} style=${{ ...S.ghost, padding: "7px 10px", borderStyle: "dashed" }}>＋追加</button>
+                  <button onClick=${() => setNewWord({ kind: "end", join: "", plain: "", polite: "", link: "" })} style=${{ ...S.ghost, padding: "7px 10px", borderStyle: "dashed" }}>＋追加</button>
                 </div>
+                ${renderNewWordForm("end")}
               `}
-
-              ${newWord && html`
-                <div style=${{ marginTop: 12, padding: 12, background: PAPER, border: `1px solid ${INK}` }}>
-                  <div style=${{ fontSize: 11, color: MUTED, marginBottom: 8 }}>
-                    ${newWord.kind === "start" ? "開始の言葉を作る" : newWord.kind === "end" ? "終了の言葉を作る" : newWord.kind === "particle" ? "助詞を作る" : "重なったときのつなぎ言葉を作る"}（ほかの行動でも選べるようになります）
-                  </div>
-                  <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    ${newWord.kind === "overlap" && html`
-                      <label style=${{ fontSize: 10, color: MUTED }}>つなぎ言葉
-                        <input value=${newWord.join} onInput=${(e) => setNewWord({ ...newWord, join: e.target.value })} placeholder="の合間に" style=${{ ...S.input, display: "block", width: 140, marginTop: 3 }} /></label>
-                    `}
-                    ${newWord.kind === "particle" && html`
-                      <label style=${{ fontSize: 10, color: MUTED }}>助詞
-                        <input value=${newWord.join} onInput=${(e) => setNewWord({ ...newWord, join: e.target.value })} placeholder="へ" style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
-                    `}
-                    ${newWord.kind === "start" && html`
-                      <label style=${{ fontSize: 10, color: MUTED }}>つなぐ形
-                        <input value=${newWord.join} onInput=${(e) => setNewWord({ ...newWord, join: e.target.value })} placeholder="出かけて" style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
-                    `}
-                    ${newWord.kind !== "overlap" && newWord.kind !== "particle" && html`
-                      <label style=${{ fontSize: 10, color: MUTED }}>〜た形
-                        <input value=${newWord.plain} onInput=${(e) => setNewWord({ ...newWord, plain: e.target.value })} placeholder="出かけた" style=${{ ...S.input, display: "block", width: 100, marginTop: 3 }} /></label>
-                      <label style=${{ fontSize: 10, color: MUTED }}>〜ました形
-                        <input value=${newWord.polite} onInput=${(e) => setNewWord({ ...newWord, polite: e.target.value })} placeholder="出かけました" style=${{ ...S.input, display: "block", width: 110, marginTop: 3 }} /></label>
-                    `}
-                  </div>
-                  <div style=${{ display: "flex", gap: 8, marginTop: 10 }}>
-                    <button onClick=${addWord} style=${{ flex: 1, padding: 9, background: INK, color: PAPER, border: "none", fontSize: 12 }}>追加してこの行動に使う</button>
-                    <button onClick=${() => setNewWord(null)} style=${{ ...S.ghost, padding: 9, fontSize: 12 }}>やめる</button>
-                  </div>
-                </div>`}
 
               ${ea.diary !== "off" && html`
                 <div style=${{ ...S.label, marginTop: 22 }}>ほかの行動と重なったとき</div>
@@ -1040,6 +1099,7 @@ function App() {
                     </span>`)}
                   <button onClick=${() => setNewWord({ kind: "overlap", join: "", plain: "", polite: "" })} style=${{ ...S.ghost, padding: "7px 10px", borderStyle: "dashed" }}>＋追加</button>
                 </div>
+                ${renderNewWordForm("overlap")}
                 <div style=${{ fontSize: 10, color: MUTED, marginTop: 6, lineHeight: 1.7 }}>
                   ${ea.overlap ? `先に始まっていた行動${ea.overlap}…と続けます。` : `${ea.name}は、重なっていても独立した文で書きます。`}
                 </div>
