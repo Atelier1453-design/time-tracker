@@ -308,19 +308,46 @@ function App() {
   };
   const addWord = () => {
     if (!newWord) return;
-    const { kind, join, plain, polite, link } = newWord;
+    const { kind, join, plain, polite, link, original } = newWord;
+    const editing = original != null;
     if (kind === "overlap" || kind === "particle") {
       const w = join.trim();
+      if (!w) return setNewWord(null);
+      if (editing) {
+        mutate(() => {
+          if (kind === "overlap") {
+            setOverlapWords((p) => p.map((x) => (x === original ? w : x)));
+            setActivities((p) => p.map((a) => (a.overlap === original ? { ...a, overlap: w } : a)));
+          } else {
+            setParticles((p) => p.map((x) => (x === original ? w : x)));
+            setActivities((p) => p.map((a) => (a.np === original ? { ...a, np: w } : a)));
+          }
+        });
+        return setNewWord(null);
+      }
       const list = kind === "overlap" ? overlapWords : particles;
-      if (!w || list.includes(w)) return setNewWord(null);
+      if (list.includes(w)) return setNewWord(null);
       mutate(() => (kind === "overlap" ? setOverlapWords((p) => [...p, w]) : setParticles((p) => [...p, w])));
       if (ea) patchActivity(ea.id, kind === "overlap" ? { overlap: w } : { np: w });
       return setNewWord(null);
     }
     if (kind === "start" ? !join.trim() : !plain.trim()) return;
     const w = kind === "start"
-      ? { join: join.trim(), plain: plain.trim() || join.trim(), polite: polite.trim() || plain.trim(), custom: true }
-      : { plain: plain.trim(), polite: polite.trim() || plain.trim(), ...(link?.trim() ? { link: link.trim() } : {}), custom: true };
+      ? { join: join.trim(), plain: plain.trim() || join.trim(), polite: polite.trim() || plain.trim(), custom: editing ? original.custom : true }
+      : { plain: plain.trim(), polite: polite.trim() || plain.trim(), ...(link?.trim() ? { link: link.trim() } : {}), custom: editing ? original.custom : true };
+    if (editing) {
+      const oldKey = wordKey(original);
+      mutate(() => {
+        if (kind === "start") {
+          setStartWords((p) => p.map((x) => (wordKey(x) === oldKey ? w : x)));
+          setActivities((p) => p.map((a) => (a.startWord && wordKey(a.startWord) === oldKey ? { ...a, startWord: w } : a)));
+        } else {
+          setEndWords((p) => p.map((x) => (wordKey(x) === oldKey ? w : x)));
+          setActivities((p) => p.map((a) => (a.endWord && wordKey(a.endWord) === oldKey ? { ...a, endWord: w } : a)));
+        }
+      });
+      return setNewWord(null);
+    }
     mutate(() => (kind === "start" ? setStartWords((p) => [...p, w]) : setEndWords((p) => [...p, w])));
     if (ea) patchActivity(ea.id, kind === "start" ? { startWord: w } : { endWord: w });
     setNewWord(null);
@@ -371,8 +398,38 @@ function App() {
     setSaved(false);
   };
   const insertTemplate = (tpl) => insertAtCursor(fillPlaceholders(tpl.text, viewDay, weather[dateKey(viewDay)]));
+  /* 「日付の下」に入れる（天気用）：1行目の改行の直後 */
+  const insertAfterDate = (piece) => {
+    const idx = diary.indexOf("\n");
+    const pos = idx >= 0 ? idx + 1 : diary.length;
+    setDiary(diary.slice(0, pos) + piece + "\n" + diary.slice(pos));
+    setSaved(false);
+  };
+  /* 「本文の前」に入れる（はじめの一文用）：ヘッダー（日付・天気）のあとの最初の空行の直後 */
+  const insertAtBodyTop = (piece) => {
+    const idx = diary.indexOf("\n\n");
+    const pos = idx >= 0 ? idx + 2 : 0;
+    setDiary(diary.slice(0, pos) + piece + "\n" + diary.slice(pos));
+    setSaved(false);
+  };
+  /* 「本文の最後」に入れる（締めの一文用）：末尾の改行を整えてから追加 */
+  const insertAtEnd = (piece) => {
+    setDiary(diary.replace(/\n+$/, "") + "\n\n" + piece);
+    setSaved(false);
+  };
+  /* 「締めの一文」テンプレートの直前に入れる（まとめの一文用）。
+     すでに締めの一文が本文中に見つかれば、その直前に。見つからなければ最後に。 */
+  const closingTemplate = templates.find((x) => x.label === "締めの一文" && x.text.trim());
+  const insertBeforeClosing = (piece) => {
+    const closingText = closingTemplate ? fillPlaceholders(closingTemplate.text, viewDay, weather[dateKey(viewDay)]) : null;
+    const idx = closingText ? diary.indexOf(closingText) : -1;
+    if (idx < 0) return insertAtEnd(piece);
+    const before = diary.slice(0, idx).replace(/\n+$/, "");
+    setDiary(`${before}\n\n${piece}\n\n${diary.slice(idx)}`);
+    setSaved(false);
+  };
   /* 「はじめの一文」「まとめの一文」「天気」は、自動で入る場所（先頭・末尾）とは別に、
-     カーソルの位置へも手動で差し込めるようにしたもの。composeDiary の同名ロジックと
+     決まった位置へも手動で差し込めるようにしたもの。composeDiary の同名ロジックと
      見た目を合わせているが、こちらは「その場に１つだけ挿す」ための簡易版。 */
   const introText = () => {
     const names = byTime.filter((a) => a.diary !== "off" && a.inIntro !== false).map((a) => a.name);
@@ -609,10 +666,12 @@ function App() {
      どの一覧に追加したのか分かりにくく紛らわしいため）。 */
   const renderNewWordForm = (kind) => {
     if (!newWord || newWord.kind !== kind) return null;
+    const editing = newWord.original != null;
+    const label = kind === "start" ? "開始の言葉" : kind === "end" ? "終了の言葉" : kind === "particle" ? "助詞" : "重なったときのつなぎ言葉";
     return html`
       <div style=${{ marginTop: 8, padding: 12, background: PAPER, border: `1px solid ${INK}` }}>
         <div style=${{ fontSize: 11, color: MUTED, marginBottom: 8 }}>
-          ${kind === "start" ? "開始の言葉を作る" : kind === "end" ? "終了の言葉を作る" : kind === "particle" ? "助詞を作る" : "重なったときのつなぎ言葉を作る"}（ほかの行動でも選べるようになります）
+          ${editing ? `${label}を編集` : `${label}を作る（ほかの行動でも選べるようになります）`}
         </div>
         <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           ${kind === "overlap" && html`
@@ -639,9 +698,12 @@ function App() {
           `}
         </div>
         <div style=${{ display: "flex", gap: 8, marginTop: 10 }}>
-          <button onClick=${addWord} style=${{ flex: 1, padding: 9, background: INK, color: PAPER, border: "none", fontSize: 12 }}>追加してこの行動に使う</button>
+          <button onClick=${addWord} style=${{ flex: 1, padding: 9, background: INK, color: PAPER, border: "none", fontSize: 12 }}>${editing ? "保存する" : "追加してこの行動に使う"}</button>
           <button onClick=${() => setNewWord(null)} style=${{ ...S.ghost, padding: 9, fontSize: 12 }}>やめる</button>
         </div>
+        ${editing && (kind === "particle" || kind === "overlap" ? !(kind === "particle" ? PARTICLES : OVERLAP_WORDS).includes(newWord.original) : newWord.original.custom) && html`
+          <button onClick=${() => { removeWord(kind, newWord.original); setNewWord(null); }} style=${{ ...S.ghost, width: "100%", marginTop: 8, color: ALERT, borderColor: ALERT }}>この言葉を削除</button>
+        `}
       </div>`;
   };
 
@@ -827,16 +889,13 @@ function App() {
             style=${{ width: "100%", border: `1px solid ${RULE}`, background: PAPER, color: INK, padding: 10, fontSize: 14, lineHeight: 1.8, fontFamily: "'Hiragino Sans','Yu Gothic',system-ui,sans-serif", resize: "vertical" }} />
           ${(introPiece || summaryPiece || weatherPiece || insertableTemplates.length > 0) && html`
             <div style=${{ marginTop: 8 }}>
-              <div style=${{ fontSize: 10, color: MUTED, marginBottom: 5 }}>カーソルの位置に差し込む</div>
+              <div style=${{ fontSize: 10, color: MUTED, marginBottom: 5 }}>文を差し込む</div>
               <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                ${introPiece && html`<button onClick=${() => insertAtCursor(introPiece)} style=${{ ...S.ghost, color: INK }}>＋はじめの一文</button>`}
-                ${summaryPiece && html`<button onClick=${() => insertAtCursor(summaryPiece)} style=${{ ...S.ghost, color: INK }}>＋まとめの一文</button>`}
-                ${weatherPiece && html`<button onClick=${() => insertAtCursor(weatherPiece)} style=${{ ...S.ghost, color: INK }}>＋天気</button>`}
+                ${weatherPiece && html`<button onClick=${() => insertAfterDate(weatherPiece)} style=${{ ...S.ghost, color: INK }}>＋天気</button>`}
+                ${introPiece && html`<button onClick=${() => insertAtBodyTop(introPiece)} style=${{ ...S.ghost, color: INK }}>＋はじめの一文</button>`}
+                ${summaryPiece && html`<button onClick=${() => insertBeforeClosing(summaryPiece)} style=${{ ...S.ghost, color: INK }}>＋まとめの一文</button>`}
                 ${insertableTemplates.map((x) => html`
-                  <span key=${x.id} style=${{ display: "inline-flex" }}>
-                    <button onClick=${() => insertTemplate(x)} style=${{ ...S.ghost, color: INK }}>＋${x.label}</button>
-                    <button onClick=${() => removeTemplate(x.id)} aria-label=${`「${x.label}」を削除`} style=${{ ...S.ghost, borderLeft: "none", padding: "5px 6px" }}>×</button>
-                  </span>`)}
+                  <button key=${x.id} onClick=${() => (x.label === "締めの一文" ? insertAtEnd(fillPlaceholders(x.text, viewDay, weather[dateKey(viewDay)])) : insertTemplate(x))} style=${{ ...S.ghost, color: INK }}>＋${x.label}</button>`)}
               </div>
             </div>`}
           <div style=${{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
@@ -1021,7 +1080,7 @@ function App() {
                   <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     ${particles.map((pp) => html`
                       <span key=${pp || "none"} style=${{ display: "inline-flex" }}>
-                        <button onClick=${() => patchActivity(ea.id, { np: pp })} style=${pill((ea.np ?? "を") === pp)}>${pp || "なし"}</button>
+                        <button onClick=${() => { const sel = (ea.np ?? "を") === pp; sel ? setNewWord({ kind: "particle", join: pp, plain: "", polite: "", original: pp }) : patchActivity(ea.id, { np: pp }); }} style=${pill((ea.np ?? "を") === pp)}>${pp || "なし"}</button>
                         ${pp && !PARTICLES.includes(pp) && html`<button onClick=${() => removeWord("particle", pp)} aria-label="この助詞を削除" style=${{ ...S.ghost, borderLeft: "none", padding: "7px 6px" }}>×</button>`}
                       </span>`)}
                     <button onClick=${() => setNewWord({ kind: "particle", join: "", plain: "", polite: "" })} style=${{ ...S.ghost, padding: "7px 10px", borderStyle: "dashed" }}>＋追加</button>
@@ -1039,7 +1098,7 @@ function App() {
                   <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     ${startWords.map((w) => html`
                       <span key=${wordKey(w)} style=${{ display: "inline-flex" }}>
-                        <button onClick=${() => patchActivity(ea.id, { startWord: w })} style=${pill((ea.startWord?.join ?? "") === (w.join ?? ""))}>${w.label || w.join}</button>
+                        <button onClick=${() => { const sel = (ea.startWord?.join ?? "") === (w.join ?? ""); sel ? setNewWord({ kind: "start", join: w.join || "", plain: w.plain || "", polite: w.polite || "", original: w }) : patchActivity(ea.id, { startWord: w }); }} style=${pill((ea.startWord?.join ?? "") === (w.join ?? ""))}>${w.label || w.join}</button>
                         ${w.custom && html`<button onClick=${() => removeWord("start", w)} aria-label="この言葉を削除" style=${{ ...S.ghost, borderLeft: "none", padding: "7px 6px" }}>×</button>`}
                       </span>`)}
                     <button onClick=${() => setNewWord({ kind: "start", join: "", plain: "", polite: "" })} style=${{ ...S.ghost, padding: "7px 10px", borderStyle: "dashed" }}>＋追加</button>
@@ -1054,7 +1113,7 @@ function App() {
                 <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   ${endWords.map((w) => html`
                     <span key=${wordKey(w)} style=${{ display: "inline-flex" }}>
-                      <button onClick=${() => patchActivity(ea.id, { endWord: w })} style=${pill((ea.endWord?.plain ?? "") === w.plain)}>${w.label || w.plain}</button>
+                      <button onClick=${() => { const sel = (ea.endWord?.plain ?? "") === w.plain; sel ? setNewWord({ kind: "end", join: "", plain: w.plain || "", polite: w.polite || "", link: w.link || "", original: w }) : patchActivity(ea.id, { endWord: w }); }} style=${pill((ea.endWord?.plain ?? "") === w.plain)}>${w.label || w.plain}</button>
                       ${w.custom && html`<button onClick=${() => removeWord("end", w)} aria-label="この言葉を削除" style=${{ ...S.ghost, borderLeft: "none", padding: "7px 6px" }}>×</button>`}
                     </span>`)}
                   <button onClick=${() => setNewWord({ kind: "end", join: "", plain: "", polite: "", link: "" })} style=${{ ...S.ghost, padding: "7px 10px", borderStyle: "dashed" }}>＋追加</button>
@@ -1071,7 +1130,7 @@ function App() {
                 <div style=${{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
                   ${particles.map((pp) => html`
                     <span key=${pp || "none"} style=${{ display: "inline-flex" }}>
-                      <button onClick=${() => patchActivity(ea.id, { np: pp })} style=${pill((ea.np ?? "を") === pp)}>${pp || "なし"}</button>
+                      <button onClick=${() => { const sel = (ea.np ?? "を") === pp; sel ? setNewWord({ kind: "particle", join: pp, plain: "", polite: "", original: pp }) : patchActivity(ea.id, { np: pp }); }} style=${pill((ea.np ?? "を") === pp)}>${pp || "なし"}</button>
                       ${pp && !PARTICLES.includes(pp) && html`<button onClick=${() => removeWord("particle", pp)} aria-label="この助詞を削除" style=${{ ...S.ghost, borderLeft: "none", padding: "7px 6px" }}>×</button>`}
                     </span>`)}
                   <button onClick=${() => setNewWord({ kind: "particle", join: "", plain: "", polite: "" })} style=${{ ...S.ghost, padding: "7px 10px", borderStyle: "dashed" }}>＋追加</button>
@@ -1081,7 +1140,7 @@ function App() {
                 <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   ${endWords.map((w) => html`
                     <span key=${wordKey(w)} style=${{ display: "inline-flex" }}>
-                      <button onClick=${() => patchActivity(ea.id, { endWord: w })} style=${pill((ea.endWord?.plain ?? "") === w.plain)}>${w.label || w.plain}</button>
+                      <button onClick=${() => { const sel = (ea.endWord?.plain ?? "") === w.plain; sel ? setNewWord({ kind: "end", join: "", plain: w.plain || "", polite: w.polite || "", link: w.link || "", original: w }) : patchActivity(ea.id, { endWord: w }); }} style=${pill((ea.endWord?.plain ?? "") === w.plain)}>${w.label || w.plain}</button>
                       ${w.custom && html`<button onClick=${() => removeWord("end", w)} aria-label="この言葉を削除" style=${{ ...S.ghost, borderLeft: "none", padding: "7px 6px" }}>×</button>`}
                     </span>`)}
                   <button onClick=${() => setNewWord({ kind: "end", join: "", plain: "", polite: "", link: "" })} style=${{ ...S.ghost, padding: "7px 10px", borderStyle: "dashed" }}>＋追加</button>
@@ -1094,7 +1153,7 @@ function App() {
                 <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   ${overlapWords.map((w) => html`
                     <span key=${w || "none"} style=${{ display: "inline-flex" }}>
-                      <button onClick=${() => patchActivity(ea.id, { overlap: w })} style=${pill((ea.overlap ?? "") === w)}>${w || "分けて書く"}</button>
+                      <button onClick=${() => { const sel = (ea.overlap ?? "") === w; sel ? setNewWord({ kind: "overlap", join: w, plain: "", polite: "", original: w }) : patchActivity(ea.id, { overlap: w }); }} style=${pill((ea.overlap ?? "") === w)}>${w || "分けて書く"}</button>
                       ${w && !OVERLAP_WORDS.includes(w) && html`<button onClick=${() => removeWord("overlap", w)} aria-label="この言葉を削除" style=${{ ...S.ghost, borderLeft: "none", padding: "7px 6px" }}>×</button>`}
                     </span>`)}
                   <button onClick=${() => setNewWord({ kind: "overlap", join: "", plain: "", polite: "" })} style=${{ ...S.ghost, padding: "7px 10px", borderStyle: "dashed" }}>＋追加</button>
