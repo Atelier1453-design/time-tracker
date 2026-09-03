@@ -11,7 +11,7 @@ import {
   OVERLAP_STYLE_MIGRATE, normalize, uid,
 } from "./constants.js";
 import {
-  DAY, startOfDay, hhmm, clock, dur, WEEK, dateLabel, fullDateLabel, dateKey,
+  DAY, startOfDay, hhmm, dur, WEEK, dateLabel, fullDateLabel, dateKey,
   toTimeInput, onDay, onDate, previewOf, previewHalf, fillPlaceholders, composeDiary, fmtTime,
 } from "./diary.js";
 import { checkStorage, storageBackend, saveData, loadData } from "./storage.js";
@@ -71,7 +71,6 @@ function App() {
   const [restored, setRestored] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [probe, setProbe] = useState(null);
-  const [fixing, setFixing] = useState(null);
   const [lastStopped, setLastStopped] = useState(null); // { sessionId, activityId, at }
   const [probeEditing, setProbeEditing] = useState(null); // session id being edited in the probe panel
   const [probeAdd, setProbeAdd] = useState(null); // { activityId, end } draft for "add a record here"
@@ -278,7 +277,9 @@ function App() {
       : [...points].reverse().find((p) => p < (probe ?? Infinity));
     if (next != null) setProbeAt(next);
   };
-  const probeHits = probe == null ? [] : day.filter((s) => s.from <= probe && s.to > probe);
+  /* 履歴欄に表示する記録：指定した時刻に重なっている記録（probe）に加えて、
+     計測中の記録は時刻に関係なく常に含める（計測中一覧をこの欄に統合したため）。 */
+  const historyItems = day.filter((s) => (probe != null && s.from <= probe && s.to > probe) || (isToday && s.end == null));
   const probeStart = probe == null ? null : Math.round(probe / 60000) * 60000;
   const addAtProbe = () => {
     if (!probeAdd || !probeAdd.activityId || !probeAdd.end) return;
@@ -428,6 +429,23 @@ function App() {
     setDiary(`${before}\n\n${piece}\n\n${diary.slice(idx)}`);
     setSaved(false);
   };
+  /* その文をきれいに取り除く（差し込むときに足した改行・空行も一緒に整える） */
+  const stripPiece = (text, piece) => {
+    const idx = text.indexOf(piece);
+    if (idx < 0) return text;
+    let before = text.slice(0, idx);
+    let after = text.slice(idx + piece.length);
+    if (after.startsWith("\n")) after = after.slice(1);
+    return (before + after).replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "").replace(/\n+$/, "");
+  };
+  /* 「＋はじめの一文」などのボタンは、押すたびに足されていくと分かりにくいので、
+     すでに入っていれば取り除き、無ければ入れる（オンオフの）トグルにする。 */
+  const togglePiece = (piece, insertFn) => {
+    if (piece == null) return;
+    if (diary.includes(piece)) setDiary(stripPiece(diary, piece));
+    else insertFn(piece);
+    setSaved(false);
+  };
   /* 「はじめの一文」「まとめの一文」「天気」は、自動で入る場所（先頭・末尾）とは別に、
      決まった位置へも手動で差し込めるようにしたもの。composeDiary の同名ロジックと
      見た目を合わせているが、こちらは「その場に１つだけ挿す」ための簡易版。 */
@@ -452,7 +470,7 @@ function App() {
   const copyDiary = async () => {
     try { await navigator.clipboard.writeText(diary); setCopied(true); setTimeout(() => setCopied(false), 1800); } catch (e) { setCopied(false); }
   };
-  useEffect(() => { setDiary(null); setSaved(false); setProbe(null); setFixing(null); setProbeEditing(null); }, [viewDay]);
+  useEffect(() => { setDiary(null); setSaved(false); setProbe(null); setProbeEditing(null); }, [viewDay]);
 
   /* ── weather location search ── */
   const runGeoSearch = async () => {
@@ -766,25 +784,26 @@ function App() {
           <button onClick=${() => jumpProbe(1)} disabled=${!points.some((p) => p > (probe ?? -Infinity))} style=${{ ...S.ghost, flex: 1, padding: 7 }}>次の区切り ▶</button>
         </div>
 
-        ${probe != null && html`
+        ${(probe != null || historyItems.length > 0) && html`
           <div style=${{ marginTop: 8, border: `1px solid ${RULE}`, background: CARD, padding: "10px 12px" }}>
-            <div style=${{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: probeHits.length ? 8 : 0 }}>
-              <span style=${{ fontSize: 18, fontVariantNumeric: "tabular-nums" }}>${hhmm(probe)}</span>
-              <button onClick=${() => { setProbe(null); setProbeEditing(null); setProbeAdd(null); }} style=${{ ...S.ghost, border: "none" }}>閉じる</button>
+            <div style=${{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: historyItems.length ? 8 : 0 }}>
+              <span style=${{ fontSize: 18, fontVariantNumeric: "tabular-nums" }}>${probe != null ? hhmm(probe) : "計測中"}</span>
+              ${probe != null && html`<button onClick=${() => { setProbe(null); setProbeEditing(null); setProbeAdd(null); }} style=${{ ...S.ghost, border: "none" }}>閉じる</button>`}
             </div>
-            ${probeHits.length === 0 ? html`
-              <div style=${{ fontSize: 12, color: MUTED }}>この時刻の記録はありません。</div>` : probeHits.map((s) => {
+            ${historyItems.length === 0 ? html`
+              <div style=${{ fontSize: 12, color: MUTED }}>この時刻の記録はありません。</div>` : historyItems.map((s) => {
               const editing = probeEditing === s.id;
+              const elapsed = (probe ?? now) - s.from;
               return html`
               <div key=${s.id}>
                 <div style=${{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
-                  <span style=${{ width: 8, height: 18, background: act(s.activityId)?.color, flexShrink: 0 }} />
+                  <span style=${{ width: 8, height: 18, background: act(s.activityId)?.color, flexShrink: 0, animation: s.end == null ? "pulse 2.4s ease-in-out infinite" : "none" }} />
                   <button onClick=${() => { const next = editing ? null : s.id; setProbeEditing(next); setEndDraft(""); }}
-                    style=${{ fontSize: 13, flex: 1, minWidth: 0, textAlign: "left", background: "transparent", border: "none", color: "inherit", textDecoration: editing ? "underline" : "none", padding: "4px 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    ${act(s.activityId)?.name}${s.memo && html`<span style=${{ color: MUTED }}>　（${s.memo}）</span>`}
+                    style=${{ fontSize: 13, flex: 1, minWidth: 0, textAlign: "left", background: editing ? INK : "transparent", color: editing ? PAPER : INK, border: `1px solid ${editing ? INK : RULE}`, padding: "5px 8px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    ${act(s.activityId)?.name}${s.memo && html`<span style=${{ color: editing ? PAPER : MUTED }}>　（${s.memo}）</span>`}
                   </button>
                   <span style=${{ fontSize: 11, color: MUTED, flexShrink: 0 }}>${hhmm(s.from)}〜${s.end == null ? "" : hhmm(s.to)}</span>
-                  <span style=${{ fontSize: 13, fontVariantNumeric: "tabular-nums", minWidth: 62, textAlign: "right" }}>${dur(probe - s.from)}</span>
+                  <span style=${{ fontSize: 13, fontVariantNumeric: "tabular-nums", minWidth: 62, textAlign: "right" }}>${elapsed >= 0 ? dur(elapsed) : ""}</span>
                 </div>
                 ${editing && html`
                   <div style=${{ marginBottom: 8 }}>
@@ -793,8 +812,9 @@ function App() {
                   </div>`}
               </div>`;
             })}
-            ${probeHits.length > 0 && html`<div style=${{ fontSize: 10, color: MUTED, marginTop: 6, marginBottom: 4 }}>右の数字はこの時点までの経過時間。行動名をタップすると時刻を直せます。</div>`}
-            ${probeAdd ? html`
+            ${historyItems.filter((s) => s.end == null).length > 1 && html`<button onClick=${stopAll} style=${{ ...S.ghost, width: "100%", marginTop: 4, padding: 7 }}>すべて終了</button>`}
+            ${historyItems.length > 0 && html`<div style=${{ fontSize: 10, color: MUTED, marginTop: 6, marginBottom: 4 }}>右の数字はこの時点までの経過時間。行動名をタップすると時刻を直せます。</div>`}
+            ${probe != null && (probeAdd ? html`
               <div style=${{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${RULE}` }}>
                 <div style=${{ fontSize: 11, color: MUTED, marginBottom: 6 }}>${hhmm(probeStart)}から記録を追加</div>
                 <div style=${{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
@@ -811,8 +831,8 @@ function App() {
                   <button onClick=${() => setProbeAdd(null)} style=${S.ghost}>やめる</button>
                 </div>
               </div>` : html`
-              <button onClick=${() => setProbeAdd({ activityId: activities[0]?.id, end: "" })} style=${{ ...S.ghost, width: "100%", marginTop: probeHits.length > 0 ? 4 : 10, padding: 8, color: INK }}>＋ここに記録を追加</button>
-            `}
+              <button onClick=${() => setProbeAdd({ activityId: activities[0]?.id, end: "" })} style=${{ ...S.ghost, width: "100%", marginTop: historyItems.length > 0 ? 4 : 10, padding: 8, color: INK }}>＋ここに記録を追加</button>
+            `)}
           </div>`}
       </div>
 
@@ -820,28 +840,6 @@ function App() {
         <div style=${{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "10px 12px", marginBottom: 10, background: CARD, border: `1px solid ${RULE}` }}>
           <span style=${{ fontSize: 12 }}>「${act(lastStopped.activityId)?.name}」の記録を止めました。</span>
           <button onClick=${undoStop} style=${{ padding: "6px 12px", background: INK, color: PAPER, border: "none", fontSize: 12, flexShrink: 0 }}>元に戻す</button>
-        </div>`}
-
-      ${isToday && running.length > 0 && html`
-        <div style=${{ marginBottom: 14 }}>
-          ${running.map((s) => {
-            const a = act(s.activityId);
-            const open = fixing === s.id;
-            return html`
-              <div key=${s.id} style=${{ borderBottom: `1px solid ${RULE}` }}>
-                <div style=${{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0" }}>
-                  <span style=${{ width: 8, height: 20, background: a?.color ?? INK, animation: "pulse 2.4s ease-in-out infinite", flexShrink: 0 }} />
-                  <span style=${{ fontSize: 13, flex: 1 }}>${a?.name ?? "—"}</span>
-                  <button
-                    onClick=${() => { setFixing(open ? null : s.id); setEndDraft(""); }}
-                    style=${{ fontSize: 12, padding: "4px 8px", background: open ? INK : "transparent", color: open ? PAPER : INK, border: `1px solid ${open ? INK : RULE}` }}
-                  >${hhmm(s.start)}〜</button>
-                  <span style=${{ fontSize: 18, fontWeight: 300, fontVariantNumeric: "tabular-nums" }}>${clock(now - s.start)}</span>
-                </div>
-                ${open && renderLiveFields(s, () => setFixing(null))}
-              </div>`;
-          })}
-          ${running.length > 1 && html`<button onClick=${stopAll} style=${{ ...S.ghost, width: "100%", marginTop: 8, padding: 7 }}>すべて終了</button>`}
         </div>`}
 
       ${isToday ? html`
@@ -889,13 +887,18 @@ function App() {
             style=${{ width: "100%", border: `1px solid ${RULE}`, background: PAPER, color: INK, padding: 10, fontSize: 14, lineHeight: 1.8, fontFamily: "'Hiragino Sans','Yu Gothic',system-ui,sans-serif", resize: "vertical" }} />
           ${(introPiece || summaryPiece || weatherPiece || insertableTemplates.length > 0) && html`
             <div style=${{ marginTop: 8 }}>
-              <div style=${{ fontSize: 10, color: MUTED, marginBottom: 5 }}>文を差し込む</div>
+              <div style=${{ fontSize: 10, color: MUTED, marginBottom: 5 }}>文を差し込む（もう一度押すと外れます）</div>
               <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                ${weatherPiece && html`<button onClick=${() => insertAfterDate(weatherPiece)} style=${{ ...S.ghost, color: INK }}>＋天気</button>`}
-                ${introPiece && html`<button onClick=${() => insertAtBodyTop(introPiece)} style=${{ ...S.ghost, color: INK }}>＋はじめの一文</button>`}
-                ${summaryPiece && html`<button onClick=${() => insertBeforeClosing(summaryPiece)} style=${{ ...S.ghost, color: INK }}>＋まとめの一文</button>`}
-                ${insertableTemplates.map((x) => html`
-                  <button key=${x.id} onClick=${() => (x.label === "締めの一文" ? insertAtEnd(fillPlaceholders(x.text, viewDay, weather[dateKey(viewDay)])) : insertTemplate(x))} style=${{ ...S.ghost, color: INK }}>＋${x.label}</button>`)}
+                ${weatherPiece && html`<button onClick=${() => togglePiece(weatherPiece, insertAfterDate)} style=${pill(diary.includes(weatherPiece))}>${diary.includes(weatherPiece) ? "✓" : "＋"}天気</button>`}
+                ${introPiece && html`<button onClick=${() => togglePiece(introPiece, insertAtBodyTop)} style=${pill(diary.includes(introPiece))}>${diary.includes(introPiece) ? "✓" : "＋"}はじめの一文</button>`}
+                ${summaryPiece && html`<button onClick=${() => togglePiece(summaryPiece, insertBeforeClosing)} style=${pill(diary.includes(summaryPiece))}>${diary.includes(summaryPiece) ? "✓" : "＋"}まとめの一文</button>`}
+                ${insertableTemplates.map((x) => {
+                  const isClosing = x.label === "締めの一文";
+                  const text = fillPlaceholders(x.text, viewDay, weather[dateKey(viewDay)]);
+                  const on = diary.includes(text);
+                  return html`
+                  <button key=${x.id} onClick=${() => (isClosing ? togglePiece(text, insertAtEnd) : insertTemplate(x))} style=${isClosing ? pill(on) : { ...S.ghost, color: INK }}>${isClosing ? (on ? "✓" : "＋") : "＋"}${x.label}</button>`;
+                })}
               </div>
             </div>`}
           <div style=${{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
@@ -1092,6 +1095,7 @@ function App() {
                 <div style=${{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
                   ${SP_PARTICLES.map((pp) => html`<button key=${pp || "none"} onClick=${() => patchActivity(ea.id, { sp: pp })} style=${pill((ea.sp ?? "に") === pp)}>◯時${pp || "（なし）"}</button>`)}
                 </div>
+                <div style=${{ borderTop: `1px solid ${RULE}`, marginBottom: 10 }} />
                 ${ea.merge !== false ? html`
                   <div style=${{ fontSize: 10, color: MUTED, lineHeight: 1.6 }}>開始の言葉は「1回ずつ書く」にすると選べます。</div>
                   ` : html`
@@ -1110,6 +1114,8 @@ function App() {
                 <div style=${{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
                   ${EP_PARTICLES.map((pp) => html`<button key=${pp || "none"} onClick=${() => patchActivity(ea.id, { ep: pp })} style=${pill((ea.ep ?? "に") === pp)}>◯時${pp || "（なし）"}</button>`)}
                 </div>
+                <button onClick=${() => patchActivity(ea.id, { showEndTime: ea.showEndTime === false ? true : false })} style=${{ ...pill(ea.showEndTime !== false), marginBottom: 10 }}>終了時刻を表示する</button>
+                <div style=${{ borderTop: `1px solid ${RULE}`, marginBottom: 10 }} />
                 <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   ${endWords.map((w) => html`
                     <span key=${wordKey(w)} style=${{ display: "inline-flex" }}>

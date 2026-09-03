@@ -68,7 +68,7 @@ export const oneSentence = (style, a, st, en, hasStart, hasEnd, memo = "", linke
 
   if (hasStart && hasEnd) {
     const S = `${fmt(st)}${sp}`;
-    const E = `${fmt(en)}${ep}`;
+    const E = a.showEndTime === false ? "" : `${fmt(en)}${ep}`;
     const J = sw.join ? `${sw.join}、` : "";
     if (pos === "mid") return `${S}${N}${J}${E}${eFin}${memo}${punct}`;
     if (pos === "tail") return `${S}${J}${E}${N}${eFin}${memo}${punct}`;
@@ -92,7 +92,7 @@ export const mergedSentence = (style, a, segs, linked = false) => {
   const { word: eFin, punct } = endingOf(style, a.endWord, linked);
   /* 文中は、最初の時刻のすぐあとに行動名を置く */
   const spans = segs
-    .map((x, i) => `${fmt(x.from)}${sp}${pos === "mid" && i === 0 ? N : ""}${fmt(x.to)}${ep}`)
+    .map((x, i) => `${fmt(x.from)}${sp}${pos === "mid" && i === 0 ? N : ""}${a.showEndTime === false ? "" : `${fmt(x.to)}${ep}`}`)
     .join("、");
   const memo = memoOf(segs);
   if (pos === "head") return `${N}${spans}${eFin}${memo}${punct}`;
