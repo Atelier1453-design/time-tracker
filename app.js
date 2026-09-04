@@ -614,7 +614,16 @@ function App() {
           <input type="time" value=${endDraft} onInput=${(e) => setEndDraft(e.target.value)} style=${S.input} />
           <button onClick=${() => setEndDraft(toTimeInput(Date.now()))} style=${S.ghost}>現時刻</button>
           <button
-            onClick=${() => { if (endDraft) { snap(s.id, "end", onDay(startOfDay(s.start), endDraft)); onClose(); } }}
+            onClick=${() => {
+              if (!endDraft) return;
+              /* 時刻だけの入力なので、開始と同じ日で解釈すると日をまたぐ記録
+                 （夜通しの睡眠など）で終了が開始より前になってしまう。
+                 その場合は翌日の時刻とみなす（＋ここに記録を追加、と同じ考え方）。 */
+              let end = onDay(startOfDay(s.start), endDraft);
+              if (end <= s.start) end += DAY;
+              snap(s.id, "end", end);
+              onClose();
+            }}
             disabled=${!endDraft}
             style=${{ padding: "7px 14px", background: endDraft ? INK : RULE, color: PAPER, border: "none", fontSize: 12 }}
           >この時刻で終了</button>
@@ -793,7 +802,11 @@ function App() {
             ${historyItems.length === 0 ? html`
               <div style=${{ fontSize: 12, color: MUTED }}>この時刻の記録はありません。</div>` : historyItems.map((s) => {
               const editing = probeEditing === s.id;
-              const elapsed = (probe ?? now) - s.from;
+              /* 一覧の時刻・経過時間は、表示中の日にクリップした from/to ではなく
+                 記録そのものの実際の start/end を使う。日をまたぐ記録（夜通しの
+                 睡眠など）でクリップした時刻を使うと、編集欄の実際の時刻とずれて見え、
+                 経過時間も日付をまたいだ分だけ短く出てしまっていた。 */
+              const elapsed = (probe ?? now) - s.start;
               return html`
               <div key=${s.id}>
                 <div style=${{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
@@ -802,7 +815,7 @@ function App() {
                     style=${{ fontSize: 13, flex: 1, minWidth: 0, textAlign: "left", background: editing ? INK : "transparent", color: editing ? PAPER : INK, border: `1px solid ${editing ? INK : RULE}`, padding: "5px 8px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     ${act(s.activityId)?.name}${s.memo && html`<span style=${{ color: editing ? PAPER : MUTED }}>　（${s.memo}）</span>`}
                   </button>
-                  <span style=${{ fontSize: 11, color: MUTED, flexShrink: 0 }}>${hhmm(s.from)}〜${s.end == null ? "" : hhmm(s.to)}</span>
+                  <span style=${{ fontSize: 11, color: MUTED, flexShrink: 0 }}>${hhmm(s.start)}〜${s.end == null ? "" : hhmm(s.end)}</span>
                   <span style=${{ fontSize: 13, fontVariantNumeric: "tabular-nums", minWidth: 62, textAlign: "right" }}>${elapsed >= 0 ? dur(elapsed) : ""}</span>
                 </div>
                 ${editing && html`
